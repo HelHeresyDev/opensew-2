@@ -72,13 +72,20 @@ class CD_PT_avatar(_Base, Panel):
     def draw(self, context):
         scn = context.scene
         L = self.layout
-        L.operator("cd.import_character", icon='OUTLINER_OB_ARMATURE')
+        row = L.row(align=True)
+        row.label(text="Default", icon='OUTLINER_OB_ARMATURE')
+        row.operator("cd.import_character", text="Woman").figure = 'WOMAN'
+        row.operator("cd.import_character", text="Man").figure = 'MAN'
         col = L.column(align=True)
         col.prop(scn.cd, "avatar", text="")
         row = col.row(align=True)
         row.operator("cd.set_avatar", icon='USER')
         row.operator("cd.measure", text="", icon='FILE_REFRESH')
         L.prop(scn.cd, "facing")
+        row = L.row(align=True)
+        row.prop(scn.cd, "figure")
+        if scn.cd.avatar and scn.cd.figure == 'AUTO':
+            row.label(text=avatar.figure(context).title())
 
         m = None
         if scn.cd.avatar and "cd_measure" in scn:

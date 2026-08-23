@@ -74,13 +74,23 @@ def asset_path(name="default_character.blend"):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", name)
 
 
+CHARACTERS = {
+    'WOMAN': ("default_character.blend", "Camila"),
+    'MAN':   ("default_man.blend", "Kevin"),
+}
+
+
 class CD_OT_import_character(Operator):
     bl_idname = "cd.import_character"
     bl_label = "Import Default Character"
-    bl_description = ("Append the built-in fitting avatar: the project character with no "
-                      "clothing, a neutral face and the feet flattened onto the floor")
+    bl_description = ("Append a built-in fitting avatar: a project character with no "
+                      "clothing, a neutral face, arms held clear of the body and the "
+                      "feet on the floor")
     bl_options = {'REGISTER', 'UNDO'}
 
+    figure: EnumProperty(items=[(k, v[1], "The %s fitting avatar" % k.lower())
+                                for k, v in CHARACTERS.items()],
+                         name="Figure", default='WOMAN')
     reimport: BoolProperty(name="Import Another Copy", default=False,
                            description="Bring in a second copy even if this scene already has one")
 
@@ -89,15 +99,16 @@ class CD_OT_import_character(Operator):
         coll = patterns.get_collection(context, AVATAR_COLL)
 
         if not self.reimport:
-            found = [o for o in coll.objects if o.type == 'MESH' and len(o.data.vertices) > 2000]
+            found = [o for o in coll.objects if o.type == 'MESH' and len(o.data.vertices) > 2000
+                     and o.get("cd_figure", 'WOMAN') == self.figure]
             if found:
                 body = max(found, key=lambda o: len(o.data.vertices))
                 self._activate(context, body)
-                self.report({'INFO'}, "This scene already has the default character; using %s"
-                            % body.name)
+                self.report({'INFO'}, "This scene already has the default %s; using %s"
+                            % (self.figure.lower(), body.name))
                 return {'FINISHED'}
 
-        path = asset_path()
+        path = asset_path(CHARACTERS[self.figure][0])
         if not os.path.exists(path):
             self.report({'ERROR'}, "Character asset is missing: %s" % path)
             return {'CANCELLED'}
@@ -121,6 +132,7 @@ class CD_OT_import_character(Operator):
             self.report({'ERROR'}, "The character asset contained no mesh")
             return {'CANCELLED'}
         body = max(meshes, key=lambda o: len(o.data.vertices))
+        body["cd_figure"] = self.figure
         self._activate(context, body)
         m = avatar.measure(context, body, force=True)
         h = ("%.0f cm tall" % (m["height"] * 100)) if m else "measured"
@@ -206,6 +218,8 @@ class CD_OT_add_garment(Operator):
             gname = "%s%d" % (base, i)
         scn.cd.garment_name = gname
 
+        m = dict(m)
+        m["figure"] = avatar.figure(context, m)
         try:
             pieces, seams = fn(m, fit=self.fit)
         except Exception as e:
@@ -251,8 +265,19 @@ class CD_OT_add_garment(Operator):
             workspace.refresh_views(context)
         except Exception:
             pass
-        self.report({'INFO'}, "%s: %d pieces, %d seams" % (label, len(made), len(seams)))
+        self.report({'INFO'}, "%s (%s): %d pieces, %d seams"
+                    % (label, m["figure"].lower(), len(made), len(seams)))
         return {'FINISHED'}
+
+
+_OUTFIT_ITEMS = []   # Blender needs the item strings kept alive
+
+
+def _outfit_items(self, context):
+    global _OUTFIT_ITEMS
+    fig = avatar.figure(context) if context and context.scene.cd.avatar else None
+    _OUTFIT_ITEMS = library.outfit_items(fig) or library.outfit_items()
+    return _OUTFIT_ITEMS
 
 
 class CD_OT_add_outfit(Operator):
@@ -262,7 +287,8 @@ class CD_OT_add_outfit(Operator):
                       "their own layers, worn from the inside out")
     bl_options = {'REGISTER', 'UNDO'}
 
-    outfit: EnumProperty(items=library.OUTFIT_ITEMS, name="Outfit", default='CASUAL')
+    outfit: EnumProperty(items=_outfit_items, name="Outfit",
+                         description="Outfits drafted for the avatar's figure")
     sew_now: BoolProperty(name="Sew Them", default=False,
                           description="Also stitch every layer once they are drafted. "
                                       "Off by default because it takes a minute per garment")
@@ -274,7 +300,7 @@ class CD_OT_add_outfit(Operator):
         scn = context.scene
         if scn.cd.avatar is None:
             bpy.ops.cd.import_character()
-        label, parts = library.OUTFITS[self.outfit]
+        label, fig, parts = library.OUTFITS[self.outfit]
         made = []
         for preset, ease in parts:
             try:

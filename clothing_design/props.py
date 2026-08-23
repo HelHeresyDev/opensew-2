@@ -26,6 +26,14 @@ FACING = [
     ('+X', "+X", "Character faces +X"),
 ]
 
+FIGURES = [
+    ('AUTO',  "Auto",  "Tell man from woman by the measured proportions"),
+    ('WOMAN', "Woman", "Draft women's blocks: shaped side seams, hem from the hip, "
+                       "deeper neckline, sloped shoulder"),
+    ('MAN',   "Man",   "Draft men's blocks: straight side seams, wider shoulder, "
+                       "longer body, lower trouser rise"),
+]
+
 
 _MUTE = 0
 
@@ -158,6 +166,9 @@ class CDScene(PropertyGroup):
         poll=lambda self, ob: ob.type == 'MESH')
     facing: EnumProperty(items=FACING, name="Facing", default='-Y',
                          description="Which way the character looks")
+    figure: EnumProperty(items=FIGURES, name="Figure", default='AUTO',
+                         description="Whose blocks to draft. Auto reads it off the "
+                                     "measured proportions; override it if the guess is wrong")
     garment_name: StringProperty(name="Garment", default="Garment")
     resolution: FloatProperty(name="Resolution", default=0.018, min=0.004, max=0.20,
                               unit='LENGTH', description="Target edge length of new pattern pieces")

@@ -230,12 +230,14 @@ def build_profile(pts, dom, fwd, side, nbins=NBINS, nsec=NSEC):
         b = int((p.z - zmin) / height * nbins)
         bins[min(nbins - 1, max(0, b))].append(p)
 
-    cx, cy, sect = [], [], []
+    cx, cy, sect, count, cover = [], [], [], [], []
     last_c = (0.0, 0.0)
     last_r = [0.05] * nsec
     for b in bins:
+        count.append(len(b))
         if len(b) < 12:
             cx.append(last_c[0]); cy.append(last_c[1]); sect.append(list(last_r))
+            cover.append(0.0)
             continue
         xs, ys = sorted(p.x for p in b), sorted(p.y for p in b)
         mx = (_pct(xs, 0.02) + _pct(xs, 0.98)) * 0.5
@@ -253,6 +255,7 @@ def build_profile(pts, dom, fwd, side, nbins=NBINS, nsec=NSEC):
             rr.append(_pct(sorted(buckets[k]), 0.90) if len(buckets[k]) >= 3 else 0.0)
         # fill empty sectors from their neighbours
         known = [k for k in range(nsec) if rr[k] > 0.0]
+        cover.append(len(known) / float(nsec))
         if not known:
             rr = list(last_r)
         else:
@@ -268,7 +271,10 @@ def build_profile(pts, dom, fwd, side, nbins=NBINS, nsec=NSEC):
     sect = [[cols[k][i] for k in range(nsec)] for i in range(nbins)]
 
     return {"zmin": zmin, "zmax": zmax, "height": height, "nbins": nbins, "nsec": nsec,
-            "cx": _smooth(cx), "cy": _smooth(cy), "sect": sect}
+            "cx": _smooth(cx), "cy": _smooth(cy), "sect": sect,
+            # per-bin sample count and the fraction of sectors that had samples:
+            # a slice is only a real circumference where the ring is complete
+            "count": count, "cover": cover}
 
 
 # ------------------------------------------------- profile queries
@@ -326,17 +332,72 @@ def arc_width(m, z, th0, th1, steps=32):
     return total
 
 
+def slice_ok(m, z, min_cover=0.95, min_count=40):
+    """Whether the cross-section at z is a complete ring of samples. Above the
+    point where the head's skin weights take over, the masked profile thins
+    to a partial ring and then to nothing, and the smoothed radii there are
+    meaningless."""
+    count, cover = m.get("count"), m.get("cover")
+    if not count or not cover:
+        return True
+    i = int(round(_bin_t(m, z)))
+    i = min(len(count) - 1, max(0, i))
+    return count[i] >= min_count and cover[i] >= min_cover
+
+
 def neck_girth(m):
     """True neck circumference: the narrowest slice above the shoulders. The
     'neck' landmark sits at the neck base and includes the trapezius, which is
-    far too big to size a neckline from."""
+    far too big to size a neckline from. Only complete rings are considered,
+    and the scan stops at the first slice the head mask has eaten into: past
+    that the profile decays towards zero and would give a doll's neck."""
     z0 = z_of(m, "neck")
     best = girth_at(m, z0)
     z = z0
     while z < z0 + 0.13 and z < m["zmax"]:
+        if not slice_ok(m, z):
+            break
         best = min(best, girth_at(m, z))
         z += 0.01
     return best
+
+
+# ------------------------------------------------- figure
+
+def figure_score(m):
+    """Positive for a male figure, negative for a female one. Three ratios that
+    differ reliably between adult bodies regardless of size: hip to chest girth,
+    waist to hip girth, and shoulder width to hip width. Each term is scaled so
+    that a typical figure scores about +-2 and a borderline one near 0."""
+    zc, zw, zh, zs = (z_of(m, k) for k in ("chest", "waist", "hip", "shoulder"))
+    chest, waist, hip = girth_at(m, zc), girth_at(m, zw), girth_at(m, zh)
+    if min(chest, waist, hip) < 1e-6:
+        return 0.0
+    sh_w = radius_at(m, zs, math.pi * 0.5)
+    hip_w = max(1e-6, radius_at(m, zh, math.pi * 0.5))
+    s = (1.09 - hip / chest) * 10.0
+    s += (waist / hip - 0.815) * 10.0
+    s += (sh_w / hip_w - 1.045) * 10.0
+    return s
+
+
+def figure_guess(m):
+    return 'MAN' if figure_score(m) >= 0.0 else 'WOMAN'
+
+
+def figure(context, m=None):
+    """The figure the blocks are drafted for: the scene override, or the guess."""
+    choice = context.scene.cd.figure
+    if choice != 'AUTO':
+        return choice
+    ob = context.scene.cd.avatar
+    tag = ob.get("cd_figure") if ob is not None else None
+    if tag in ('MAN', 'WOMAN'):
+        return tag
+    m = m or measure(context)
+    if m is None:
+        return 'WOMAN'
+    return m.get("figure_auto") or figure_guess(m)
 
 
 def z_of(m, name):
@@ -486,6 +547,7 @@ def measure(context, ob=None, force=False):
 
     m["armature"] = arm.name if arm else ""
     m["facing"] = scn.cd.facing
+    m["figure_auto"] = figure_guess(m)
     m["key"] = key
     scn["cd_measure"] = json.dumps(m)
     _CACHE["key"] = key; _CACHE["data"] = m

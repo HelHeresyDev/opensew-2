@@ -29,48 +29,86 @@ avatar, so pattern pieces and the body share one scene and one undo stack.
 
 ## Workflow
 
-1. **Import Default Character** — brings in the bundled fitting avatar: the
-   project character with no clothing, a neutral face, and the feet flattened
-   onto the floor (the original is posed for high heels, with a 44 mm sole
-   tilt). It lands in a `CD_Avatar` collection, is set as the avatar and
-   measured in one step. Textures are stripped, so the asset is 1.4 MB rather
-   than 220 MB. Pressing it again reuses the copy already in the scene.
-   Garments come out noticeably cleaner on this avatar than on the animated
-   character, because its arms are held away from the torso instead of resting
-   against the ribs.
+1. **Default > Woman / Man** — brings in a bundled fitting avatar: Camila or
+   Kevin, the project characters with no clothing, a neutral face, arms held
+   60 degrees out and the feet on the floor (Camila's original is posed for
+   high heels, with a 44 mm sole tilt; Kevin's file was in an arms-down pose,
+   which is cleared so the rig's own rest pose is used). It lands in a
+   `CD_Avatar` collection, is set as the avatar and measured in one step.
+   Textures and the facial shape keys are stripped, so each asset is 1.4 MB
+   rather than 220-290 MB. Pressing it again reuses the copy already in the
+   scene. Kevin is rebuilt from the source file with
+   `tools/make_default_man.py`. Garments come out noticeably cleaner on these
+   avatars than on an animated character, because the arms are held away
+   from the torso instead of resting against the ribs.
 2. **Set Avatar** — or point it at your own body mesh instead. It works out which way it faces from the
    rig's toe bones, and measures it: a stack of horizontal cross-sections plus
    limb axes taken from the armature. Arms and head are masked out using the
    skin weights, so a figure standing with its arms down does not measure as
    having a 112 cm waist.
-3. **Add Garment / Outfit** — nine garments: T-Shirt, Tank Top, Dress, Jacket,
+3. **Figure** — Auto tells a man from a woman by the measured proportions
+   (hip to chest girth, waist to hip, shoulder width to hip width; Camila scores
+   -2.1, Kevin +2.2, zero is the boundary) and every block is then drafted with
+   that figure's rules. Override it if the guess is wrong for a stylised body.
+   See *Man and woman blocks* below.
+4. **Add Garment / Outfit** — nine garments: T-Shirt, Tank Top, Dress, Jacket,
    Hoodie, Skirt, Trousers, Jumpsuit, Flat Panel. **Outfit** builds several at
-   once, each on its own layer: Casual, Streetwear, Dress & Jacket, Full Layers,
-   Workwear.
+   once, each on its own layer; the list follows the figure. Man: Casual,
+   Streetwear, Workwear, Full Layers. Woman: Casual, Summer, Dress & Jacket,
+   Streetwear, Workwear.
    Original note — T-Shirt, Tank Top, Skirt, Trousers or a Flat Panel. Every
    piece is drafted from the measurements: the neckline is solved to 1.12x the
    true neck girth, the armhole to 1.3x the biceps, and the sleeve cap is
    solved by bisection to match the armhole it is sewn to.
-4. **Draw Pattern** — click points in the 2D view, Enter to close. Each click
+5. **Draw Pattern** — click points in the 2D view, Enter to close. Each click
    run becomes a named edge you can sew.
-5. **Counterpart** — copies the piece to the other side of the body and sews
+6. **Counterpart** — copies the piece to the other side of the body and sews
    the edges that meet, which is the "draw the front, get the back" step.
-6. **Fabric** — pick Crisp/Tailored, Soft/Jersey, Stiff/Denim or Light/Silk.
+7. **Fabric** — pick Crisp/Tailored, Soft/Jersey, Stiff/Denim or Light/Silk.
    Bending stiffness is the strongest control over how many folds appear;
    *Take In* shrinks the fabric onto the body once the seams are welded.
    Note the sign: in Blender a *positive* shrink tightens, negative eases out.
-7. **Grab Fabric** — Marvelous Designer's hand. Drag on the garment to pull it
+8. **Grab Fabric** — Marvelous Designer's hand. Drag on the garment to pull it
    while the simulation runs, release to let go, scroll to change the grab
    radius, Esc to finish. It works by hooking the pinned patch, because writing
    pin targets into mesh data mid-simulation stalls the solver.
-8. **Sew & Drape** — three phases:
+9. **Sew & Drape** — three phases:
    - *stitch*: cloth sewing springs pull the seams closed at low gravity
    - *weld*: paired seam vertices are merged into one continuous surface
    - *settle*: the garment drapes at full gravity
    Welding matters. Sewing springs never stop pulling, so leaving them on for
    the whole simulation crushes the fabric into wrinkles.
-9. **Finalize** — freezes the shape, adds thickness, transfers skin weights
+10. **Finalize** — freezes the shape, adds thickness, transfers skin weights
    from the body and binds to the rig, so the garment follows your animation.
+
+## Man and woman blocks
+
+Girths always come from the avatar. On top of them `library.FIGURE` applies
+the rules a cutter would, and `Figure` picks the set:
+
+| | Woman | Man |
+|---|---|---|
+| Front neck depth (tee / tank) | 7.5 / 9.5 cm scoop | 6 / 8.5 cm crew |
+| Shoulder | sloped 5.5 cm, point at 93 % of the measured width | 4.5 cm, full width |
+| Side seams | curve in at the waist when the hem is below it | straight |
+| Hem of a hip-length top | cut to the hip girth | chest width, never under 98 % of the hip |
+| Top length | to the hip line | 4.5 cm past it |
+| T-shirt sleeve | 15 cm, cuff at 82 % of the cap width | 20 cm, 88 % |
+| Trouser rise | waistband at the natural waist | 78 % of the way up from the crotch, band cut to the girth there |
+
+The waist shaping is the side seam's share of the chest-to-waist difference,
+capped at 2.2 cm per seam so a small waist never pinches. Both halves of every
+seam are drafted to the same length: the jumpsuit's deeper back crotch dip and
+the hood's front and back neck edges are each solved against the edge they
+are sewn to. `tests/test_presets.py` (headless) imports both avatars, checks
+the measurements and figure guess, drafts every preset on each and compares
+seam lengths; with `--drape` it also sews a T-shirt and trousers on each and
+counts vertices left inside the body.
+
+Neck girth is the narrowest *complete* ring above the neck base. The head is
+masked out of the profile by its skin weights, and above the last full slice
+the smoothed radii decay towards zero; Kevin's neck read 4.6 cm before the
+ring-completeness check and 41 cm after.
 
 ## Mesh and subdivision
 

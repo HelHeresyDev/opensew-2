@@ -13,6 +13,23 @@ not be corrected by hand when they went wrong.
   notes in its [README](clothing_design/README.md).
 - Illustrated docs (single self-contained page): [`docs/clothing_design.html`](docs/clothing_design.html).
 
+## Test
+
+Headless, against the two bundled avatars (Camila and Kevin): measurements,
+figure detection, every preset on both figures, seam lengths; `--drape` adds
+a sewn T-shirt and trousers on each.
+
+```bash
+blender -b --python tests/test_presets.py            # ~1 min
+blender -b --python tests/test_presets.py -- --drape  # ~3 min
+```
+
+Rebuild the male avatar asset from the source scene:
+
+```bash
+blender -b /data/kits/cc4_blender/guy-test.blend --python tools/make_default_man.py
+```
+
 ## Develop
 
 Symlink the package into Blender's add-on folder so edits are live after
