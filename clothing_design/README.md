@@ -1,4 +1,4 @@
-# Clothing Design — a Marvelous Designer style workflow for Blender
+# Clothing Design — a pattern-based garment workflow for Blender
 
 Draw flat pattern pieces, sew them together, and simulate them onto your
 character. Built and tested against Blender 5.2.
@@ -9,7 +9,7 @@ The add-on is already installed at
 `~/.config/blender/5.2/scripts/addons/clothing_design`.
 
 To install it elsewhere: `Edit > Preferences > Add-ons > Install…` and pick
-`clothing_design.zip`, then tick **Clothing Design (Marvelous-style)**.
+`clothing_design.zip`, then tick **Clothing Design**.
 
 ## The workspace
 
@@ -71,7 +71,7 @@ avatar, so pattern pieces and the body share one scene and one undo stack.
    Bending stiffness is the strongest control over how many folds appear;
    *Take In* shrinks the fabric onto the body once the seams are welded.
    Note the sign: in Blender a *positive* shrink tightens, negative eases out.
-8. **Grab Fabric** — Marvelous Designer's hand. Drag on the garment to pull it
+8. **Grab Fabric** — pull the cloth by hand. Drag on the garment to pull it
    while the simulation runs, release to let go, scroll to change the grab
    radius, Esc to finish. It works by hooking the pinned patch, because writing
    pin targets into mesh data mid-simulation stalls the solver.

@@ -3,7 +3,7 @@
 # Flat pattern pieces are wrapped onto the measured body (MD's "arrangement"),
 # joined into one mesh, and the seams become loose edges. Blender's cloth solver
 # treats loose edges as sewing springs, so the panels stitch themselves together
-# during simulation exactly as they do in Marvelous Designer.
+# during simulation the way real pattern pieces are sewn together.
 import bpy, bmesh, math, bisect
 from mathutils import Vector
 from . import avatar, patterns

@@ -1,6 +1,6 @@
 # Clothing Design for Blender
 
-**Draw flat pattern pieces, sew them, and drape them onto your character — a Marvelous Designer-style garment workflow that lives entirely inside Blender.**
+**Draw flat pattern pieces, sew them, and drape them onto your character — a pattern-based garment workflow that lives entirely inside Blender.**
 
 Free and open source. No subscription, no login server, no external dependencies: a pure-Python add-on on top of Blender's own cloth solver.
 
@@ -13,7 +13,7 @@ Free and open source. No subscription, no login server, no external dependencies
 - **Knows men from women.** The figure is read off the measured proportions (or set by hand) and each block follows that figure's drafting rules: scooped vs crew neck, sloped vs square shoulder, side seams that curve in at the waist vs straight, hem cut to the hip, trouser rise at the waist vs below it.
 - **Lets you draw your own.** Click points on the grid in the 2D pattern view, click the first point to close, name the edges, sew them. Every piece has Width and Length, and a garment has a Size that scales all its pieces together. *Counterpart* mirrors a piece to the other side of the body and stitches the edges that meet — draw the front, get the back.
 - **Sews and drapes in three phases.** Stitch (sewing springs pull the seams closed at low gravity), weld (paired seam vertices merge into one continuous surface), settle (full gravity). Welding matters: springs that never stop pulling crush the fabric into wrinkles.
-- **Grab tool.** Drag on the garment while it simulates, like the hand in Marvelous Designer.
+- **Grab tool.** Drag on the garment while it simulates and pull the fabric where you want it.
 - **Outfits, layered.** Build a whole outfit at once; each garment sits on its own layer and collides with the body and everything worn under it.
 - **Finalize.** Freezes the shape, adds thickness, transfers skin weights from the body (smoothed across neighbours, so the crotch of a jumpsuit doesn't tear when the legs separate) and binds to the rig. The garment follows your animation.
 
@@ -29,7 +29,7 @@ Built and tested on **Blender 5.2**. Nothing else to install.
 
 1. Download this repository as a zip (or clone it).
 2. Zip the `clothing_design` folder on its own: `zip -r clothing_design.zip clothing_design -x '*__pycache__*'`
-3. Blender: *Edit > Preferences > Add-ons > Install from Disk…*, pick the zip, tick **Clothing Design (Marvelous-style)**.
+3. Blender: *Edit > Preferences > Add-ons > Install from Disk…*, pick the zip, tick **Clothing Design**.
 
 Developing? Symlink `clothing_design/` into `scripts/addons/` instead and edits are live after *Reload Scripts*.
 

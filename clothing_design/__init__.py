@@ -1,9 +1,9 @@
-# Clothing Design - a Marvelous Designer style garment workflow for Blender.
+# Clothing Design - a pattern-based garment workflow for Blender.
 #
 #   2D pattern pieces  ->  arranged on the measured body  ->  sewn by cloth
 #   sewing springs  ->  draped against the body  ->  welded, thickened, rigged.
 bl_info = {
-    "name": "Clothing Design (Marvelous-style)",
+    "name": "Clothing Design",
     "author": "Marcello Morettoni",
     "version": (1, 0, 0),
     "blender": (4, 2, 0),

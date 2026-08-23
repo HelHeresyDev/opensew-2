@@ -1251,7 +1251,7 @@ class CD_OT_finalize(Operator):
 class CD_OT_build_workspace(Operator):
     bl_idname = "cd.build_workspace"
     bl_label = "Create Clothing Design Workspace"
-    bl_description = "Build the Marvelous-style workspace: 2D pattern, side and 3D views"
+    bl_description = "Build the clothing design workspace: 2D pattern, side and 3D views"
     bl_options = {'REGISTER'}
 
     def execute(self, context):
