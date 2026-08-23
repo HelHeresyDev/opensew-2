@@ -345,6 +345,7 @@ class CD_OT_counterpart(Operator):
             cp.name = ob.name + "_Back"
             patterns.move_to_collection(cp, patterns.get_collection(context, patterns.PATTERN_COLL))
             cp.cd.anchor = COUNTERPART.get(ob.cd.anchor, ob.cd.anchor)
+            cp.scale = ob.scale.copy()
             bb = [Vector(c) for c in cp.bound_box]
             w = max(p.x for p in bb) - min(p.x for p in bb)
             cp.location = (patterns.layout_slot(context, w), 0.0, ob.location.z)
@@ -566,11 +567,13 @@ class CD_OT_clear_seams(Operator):
 class CD_OT_draw_pattern(Operator):
     bl_idname = "cd.draw_pattern"
     bl_label = "Draw Pattern"
-    bl_description = ("Click to place points in the 2D pattern view, Enter to close the shape. "
-                      "Backspace undoes a point, Esc cancels")
+    bl_description = ("Click to place points in the 2D pattern view; click the first point "
+                      "again (or press Enter) to close the shape. Points snap to the grid, "
+                      "Ctrl inverts the snap. Backspace undoes a point, Esc cancels")
     bl_options = {'REGISTER', 'UNDO'}
 
     _handle = None
+    CLOSE_PX = 14.0     # screen radius round the first point that closes the outline
 
     def _plane_point(self, context, event):
         region = context.region
@@ -580,7 +583,25 @@ class CD_OT_draw_pattern(Operator):
         origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, co)
         vec = view3d_utils.region_2d_to_vector_3d(region, rv3d, co)
         p = intersect_line_plane(origin, origin + vec * 1e4, Vector((0, 0, 0)), Vector((0, 1, 0)))
+        if p is None:
+            return None
+        step = context.scene.cd.draw_snap
+        if (step > 0.0) != bool(event.ctrl):
+            p.x = round(p.x / step) * step
+            p.z = round(p.z / step) * step
         return p
+
+    def _near_first(self, context, event):
+        """Is the mouse on the first point, with enough points to make a shape?"""
+        if len(self.points) < 3:
+            return False
+        from bpy_extras.view3d_utils import location_3d_to_region_2d
+        s = location_3d_to_region_2d(context.region, context.region_data, self.points[0])
+        if s is None:
+            return False
+        dx = s.x - event.mouse_region_x
+        dy = s.y - event.mouse_region_y
+        return (dx * dx + dy * dy) ** 0.5 <= self.CLOSE_PX
 
     def invoke(self, context, event):
         if context.area is None or context.area.type != 'VIEW_3D':
@@ -588,23 +609,38 @@ class CD_OT_draw_pattern(Operator):
             return {'CANCELLED'}
         self.points = []
         self.cursor = None
+        self.closing = False
         args = (self, context)
         self._handle = bpy.types.SpaceView3D.draw_handler_add(
             _draw_callback, args, 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
-        context.area.header_text_set("Draw Pattern: click to add points, Enter to close, Esc to cancel")
+        self._header(context)
         return {'RUNNING_MODAL'}
+
+    def _header(self, context):
+        step = context.scene.cd.draw_snap
+        snap = ("snap %.0f mm (Ctrl: off)" % (step * 1000)) if step > 0 else "snap off (Ctrl: on)"
+        context.area.header_text_set(
+            "Draw Pattern   |   click to add points, click the first point or Enter to close"
+            "   |   Backspace undo, Esc cancel   |   " + snap)
 
     def modal(self, context, event):
         if context.area:
             context.area.tag_redraw()
         if event.type == 'MOUSEMOVE':
-            self.cursor = self._plane_point(context, event)
+            self.closing = self._near_first(context, event)
+            self.cursor = self.points[0].copy() if self.closing else self._plane_point(context, event)
             return {'RUNNING_MODAL'}
         if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+            if self._near_first(context, event):
+                return self.finish(context)
             p = self._plane_point(context, event)
             if p:
-                self.points.append(p)
+                # landing exactly on the first point through the grid closes too
+                if len(self.points) >= 3 and (p - self.points[0]).length < 1e-6:
+                    return self.finish(context)
+                if not self.points or (p - self.points[-1]).length > 1e-6:
+                    self.points.append(p)
             return {'RUNNING_MODAL'}
         if event.type in {'BACK_SPACE', 'DEL'} and event.value == 'PRESS':
             if self.points:
@@ -683,14 +719,26 @@ def _draw_callback(op, context):
     shader.bind()
     shader.uniform_float("color", (1.0, 0.75, 0.2, 1.0))
     batch.draw(shader)
+    closing = getattr(op, "closing", False)
     if len(scr) > 2:
         batch2 = batch_for_shader(shader, 'LINE_STRIP', {"pos": [scr[-1], scr[0]]})
-        shader.uniform_float("color", (1.0, 0.75, 0.2, 0.35))
+        shader.uniform_float("color", (0.3, 1.0, 0.4, 1.0) if closing else (1.0, 0.75, 0.2, 0.35))
         batch2.draw(shader)
     batch3 = batch_for_shader(shader, 'POINTS', {"pos": scr[:len(pts)]})
     gpu.state.point_size_set(7.0)
     shader.uniform_float("color", (0.2, 0.9, 1.0, 1.0))
     batch3.draw(shader)
+    if len(pts) >= 3:
+        # the first point is the one that closes the shape: ring it, green when hot
+        batch4 = batch_for_shader(shader, 'POINTS', {"pos": [scr[0]]})
+        gpu.state.point_size_set(16.0 if closing else 11.0)
+        shader.uniform_float("color", (0.3, 1.0, 0.4, 1.0) if closing else (1.0, 0.75, 0.2, 0.9))
+        batch4.draw(shader)
+    if op.cursor is not None and scr:
+        batch5 = batch_for_shader(shader, 'POINTS', {"pos": [scr[-1]]})
+        gpu.state.point_size_set(5.0)
+        shader.uniform_float("color", (1.0, 1.0, 1.0, 0.9))
+        batch5.draw(shader)
     gpu.state.blend_set('NONE')
 
 

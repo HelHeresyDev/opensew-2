@@ -60,8 +60,11 @@ avatar, so pattern pieces and the body share one scene and one undo stack.
    piece is drafted from the measurements: the neckline is solved to 1.12x the
    true neck girth, the armhole to 1.3x the biceps, and the sleeve cap is
    solved by bisection to match the armhole it is sewn to.
-5. **Draw Pattern** — click points in the 2D view, Enter to close. Each click
-   run becomes a named edge you can sew.
+5. **Draw Pattern** — click points in the 2D view; click the first point again
+   to close (it lights up green when the mouse is on it; Enter still works).
+   Points snap to a grid — 1 cm by default, set next to the button, 0 for off —
+   and holding Ctrl inverts the snap. Each click run becomes a named edge you
+   can sew.
 6. **Counterpart** — copies the piece to the other side of the body and sews
    the edges that meet, which is the "draw the front, get the back" step.
 7. **Fabric** — pick Crisp/Tailored, Soft/Jersey, Stiff/Denim or Light/Silk.
@@ -109,6 +112,18 @@ Neck girth is the narrowest *complete* ring above the neck base. The head is
 masked out of the profile by its skin weights, and above the last full slice
 the smoothed radii decay towards zero; Kevin's neck read 4.6 cm before the
 ring-completeness check and 41 cm after.
+
+## Scaling pieces
+
+Every piece has **Width** and **Length** in its *Arrangement* panel, and every
+garment has **Size** in the *Garments* panel that scales all of its pieces
+together so the seams keep matching. They are plain multipliers over the
+drafted or drawn shape (1 = as drafted), they update the 3D garment live, and
+they are mirrored into the piece's object scale so the 2D view shows the size
+the garment is built at. That also means `S` on a piece in the 2D view followed
+by **Sync** does the same job by hand; the builder reads the object scale. The
+cloth's rest lengths follow the scaled piece, so a longer sleeve is a longer
+sleeve, not a stretched one. *Counterpart* copies the scale.
 
 ## Mesh and subdivision
 

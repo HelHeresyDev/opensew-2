@@ -109,6 +109,18 @@ def _dir(fwd, side, th):
 
 def piece_transform(ob, m, fwd, side):
     """Return f(Vector local) -> Vector world for one pattern piece."""
+    f = _piece_transform(ob, m, fwd, side)
+    if ob.cd.anchor == 'FREE' or m is None:
+        return f                     # matrix_world already carries the scale
+    # Width / Length (and the garment's Size) live in the object scale; the
+    # pattern is in the local XZ plane
+    sx, sz = ob.scale.x, ob.scale.z
+    if abs(sx - 1.0) < 1e-6 and abs(sz - 1.0) < 1e-6:
+        return f
+    return lambda p: f(Vector((p.x * sx, p.y, p.z * sz)))
+
+
+def _piece_transform(ob, m, fwd, side):
     cd = ob.cd
     shift = Vector(cd.shift)
 

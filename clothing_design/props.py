@@ -125,6 +125,38 @@ class CDSeam(PropertyGroup):
     enabled: BoolProperty(default=True, update=_resync)
 
 
+def apply_piece_scale(ob):
+    """Mirror a piece's Width/Length and its garment's Size into the object
+    scale, so the 2D view shows the size the 3D garment is built at. The
+    builder reads the object scale, so scaling a piece with S in the 2D view
+    and pressing Sync does the same thing by hand."""
+    import bpy as _bpy
+    size = 1.0
+    g = _bpy.data.objects.get("CD_Garment_" + ob.cd.garment)
+    if g is not None and g.cd.is_garment:
+        size = g.cd.size
+    ob.scale = (ob.cd.scale_w * size, 1.0, ob.cd.scale_l * size)
+
+
+def _rescale_piece(self, context):
+    apply_piece_scale(self.id_data)
+    _resync(self, context)
+
+
+def _rescale_garment(self, context):
+    g = self.id_data
+    for ob in context.scene.objects:
+        if ob.cd.is_pattern and ob.cd.garment == g.cd.garment:
+            apply_piece_scale(ob)
+    if _MUTE or not context.scene.cd.live_sync:
+        return
+    try:
+        from . import build
+        build.sync_garment(context, report=None, garment=g.cd.garment)
+    except Exception as e:
+        print("[clothing_design] live sync failed:", e)
+
+
 class CDObject(PropertyGroup):
     """Lives on every Object. Marks pattern pieces and the generated garment."""
     is_pattern: BoolProperty(default=False)
@@ -151,6 +183,18 @@ class CDObject(PropertyGroup):
     ease:       FloatProperty(name="Ease", default=0.02, min=0.0, max=0.5, unit='LENGTH',
                               description="Distance held off the body surface",
                               update=_resync)
+    scale_w:    FloatProperty(name="Width", default=1.0, min=0.2, max=4.0, precision=3,
+                              description="Scale the piece across the pattern (its X). "
+                                          "1 = as drafted or drawn",
+                              update=_rescale_piece)
+    scale_l:    FloatProperty(name="Length", default=1.0, min=0.2, max=4.0, precision=3,
+                              description="Scale the piece along the pattern (its Y). "
+                                          "1 = as drafted or drawn",
+                              update=_rescale_piece)
+    size:       FloatProperty(name="Size", default=1.0, min=0.2, max=4.0, precision=3,
+                              description="Scale every piece of this garment together, so "
+                                          "seams keep matching. 1 = as drafted",
+                              update=_rescale_garment)
     spin:       FloatProperty(name="Spin", default=0.0, min=-3.15, max=3.15, unit='ROTATION',
                               description="Rotate the piece around the body axis",
                               update=_resync)
@@ -174,6 +218,9 @@ class CDScene(PropertyGroup):
                               unit='LENGTH', description="Target edge length of new pattern pieces")
     pattern_gap: FloatProperty(name="2D Gap", default=0.35, min=0.0, unit='LENGTH',
                                description="Spacing between pieces in the 2D pattern area")
+    draw_snap:   FloatProperty(name="Snap", default=0.01, min=0.0, max=0.5, unit='LENGTH',
+                               description="Grid the Draw Pattern tool snaps to. 0 = off; "
+                                           "holding Ctrl while drawing inverts it")
     keep_off_body: BoolProperty(name="Keep Off Body", default=True,
                                 description="Push arranged panels out of the body before "
                                             "simulating, so nothing starts inside the mesh")

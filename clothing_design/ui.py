@@ -117,6 +117,7 @@ class CD_PT_patterns(_Base, Panel):
         row = L.row(align=True)
         row.operator("cd.draw_pattern", icon='GREASEPENCIL')
         row.operator("cd.counterpart", text="Counterpart", icon='MOD_MIRROR')
+        row.prop(scn.cd, "draw_snap", text="")
         L.prop(scn.cd, "garment_name", text="Garment")
         col = L.column(align=True)
         col.prop(scn.cd, "resolution")
@@ -158,6 +159,9 @@ class CD_PT_garments(_Base, Panel):
         gs = [o for o in scn.objects if o.cd.is_garment and o.data and len(o.data.vertices)]
         if len(gs) > 1:
             L.label(text="Layer 0 is worn innermost", icon='INFO')
+        g = build.garment_object(context, create=False)
+        if g is not None:
+            L.prop(g.cd, "size", text="Size  (%s)" % g.cd.garment)
 
         col = L.column(align=True)
         row = col.row(align=True)
@@ -190,6 +194,9 @@ class CD_PT_piece(_Base, Panel):
         if ob.cd.anchor in {'ARM_L', 'ARM_R', 'LEG_L', 'LEG_R'}:
             col.prop(ob.cd, "taper", slider=True)
         col.prop(ob.cd, "ease")
+        row = L.row(align=True)
+        row.prop(ob.cd, "scale_w")
+        row.prop(ob.cd, "scale_l")
         L.prop(ob.cd, "shift")
         segs = patterns.segment_names(ob)
         if segs:
