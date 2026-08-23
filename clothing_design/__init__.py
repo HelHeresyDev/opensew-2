@@ -4,7 +4,7 @@
 #   sewing springs  ->  draped against the body  ->  welded, thickened, rigged.
 bl_info = {
     "name": "Clothing Design (Marvelous-style)",
-    "author": "Claude",
+    "author": "Marcello Morettoni",
     "version": (1, 0, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Clothing  |  Workspace: Clothing Design",
