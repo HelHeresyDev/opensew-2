@@ -1313,6 +1313,13 @@ class CD_OT_animate(Operator):
                       "to re-key, or Rest Pose to clear it")
     bl_options = {'REGISTER', 'UNDO'}
 
+    style: EnumProperty(
+        name="Walk", default='WALK',
+        items=[('WALK', "Walk", "An ordinary walk"),
+               ('CATWALK', "Catwalk", "A runway walk: slower, with the hips "
+                                      "and torso doing much more of the work "
+                                      "and the feet landing on the centre line")],
+        description="Which gait to key. Changing this resets the sliders below")
     period: IntProperty(name="Frames per Stride", default=32, min=8, max=120,
                         description="Length of one full stride")
     stride: FloatProperty(name="Stride", default=0.32, min=0.05, max=1.2,
@@ -1332,11 +1339,34 @@ class CD_OT_animate(Operator):
         av = context.scene.cd.avatar
         return av is not None and avatar.find_armature(av) is not None
 
+    def invoke(self, context, event):
+        # The style sets the sliders, so picking Catwalk and pressing Enter
+        # gives a catwalk without anyone having to know that a runway walk is
+        # mostly pelvis roll.
+        self._apply_style()
+        return context.window_manager.invoke_props_dialog(self, width=300)
+
+    def _apply_style(self):
+        pre = sim.WALK_STYLES.get(self.style)
+        if not pre:
+            return
+        self.period = pre["period"]
+        self.stride = pre["stride"]
+        self.arm_swing = pre["arm_swing"]
+
     def execute(self, context):
         scn = context.scene
-        act, msg = sim.walk_cycle(context, scn.cd.avatar, period=self.period,
-                                  stride=self.stride, arm_swing=self.arm_swing,
-                                  arm_down=self.arm_down)
+        # The style supplies the cadence and swing; a slider only overrides it
+        # if the user actually touched it. Overriding unconditionally meant the
+        # operator's own defaults won whenever execute() ran without invoke() -
+        # from a script, or from the redo panel - and Catwalk quietly keyed an
+        # ordinary 32-frame walk.
+        pre = dict(sim.WALK_STYLES.get(self.style, sim.WALK_STYLES['WALK']))
+        for key in ("period", "stride", "arm_swing"):
+            if self.properties.is_property_set(key):
+                pre[key] = getattr(self, key)
+        pre["arm_down"] = self.arm_down
+        act, msg = sim.walk_cycle(context, scn.cd.avatar, **pre)
         if act is None:
             self.report({'ERROR'}, msg)
             return {'CANCELLED'}

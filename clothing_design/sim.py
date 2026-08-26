@@ -932,8 +932,28 @@ def clear_walk(rig):
     return True
 
 
+# Two gaits. The catwalk numbers are measured off reference footage - cadence,
+# stride, hip sway, pelvis roll and shoulder counter-rotation - because what
+# separates a runway walk from a plain one is not the legs, which do much the
+# same thing, but how much the pelvis and torso move over them. Measurements
+# of how a person walks, not anybody's animation data.
+#
+#                     ordinary   catwalk   (catwalk measured from reference)
+#   frames per stride    32         70     35 frames a step, deliberate
+#   hip sway            1.3 cm    6.4 cm   12.8 cm peak to peak
+#   pelvis roll          3.4 deg  11.5 deg 22.9 deg peak to peak
+#   torso counter-rot    5.7 deg  16.4 deg 32.7 deg peak to peak
+#   cross-over           none      9 deg   feet land on the centre line
+WALK_STYLES = {
+    'WALK':    dict(period=32, stride=0.32, arm_swing=0.26, bob=0.022,
+                    sway=0.6, roll=0.06, torso=0.10, cross=0.0),
+    'CATWALK': dict(period=70, stride=0.34, arm_swing=0.20, bob=0.022,
+                    sway=2.9, roll=0.16, torso=0.29, cross=0.055),
+}
+
+
 def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
-               arm_down=0.75):
+               arm_down=0.75, sway=0.6, roll=0.06, torso=0.10, cross=0.0):
     """Key a walk-in-place cycle on the avatar's rig.
 
     Walk in place rather than travelling: the point is to watch the garment
@@ -975,7 +995,7 @@ def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
     # walking in reverse, which is exactly how it first came out.
     FWD = -1.0
 
-    def swing(role, amp_fwd, phase, fold=None, drop=0.0):
+    def swing(role, amp_fwd, phase, fold=None, drop=0.0, tuck=0.0):
         """Key one bone. amp_fwd is a forward swing; fold='back' or 'fwd'
         makes the joint hinge one way only, as a knee or an elbow does.
 
@@ -988,6 +1008,15 @@ def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
         if pb is None:
             return
         axis = _local_axis(rig, pb, side)
+        # `tuck` pulls the limb in towards the body's midline as it swings
+        # forward. It is what puts one foot in front of the other instead of
+        # on two parallel tracks, and it is the single thing that reads as a
+        # runway walk rather than a walk.
+        ax_in = _local_axis(rig, pb, fwd) if tuck else None
+        # Sign: rotating the left thigh positively about the forward axis
+        # carries it *outwards*, so the inward tuck is negative on the left.
+        # Backwards, and a runway walk comes out as a series of side splits.
+        tuck_sgn = -1.0 if role.endswith("_l") else 1.0
         q_drop = None
         if drop:
             # +drop lowers the character's right arm, -drop the left
@@ -1003,11 +1032,13 @@ def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
             else:
                 ang = FWD * amp_fwd * a
             q = Quaternion(axis, ang)
+            if ax_in is not None:
+                q = q @ Quaternion(ax_in, tuck_sgn * tuck * max(0.0, a))
             pb.rotation_quaternion = (q @ q_drop) if q_drop else q
             pb.keyframe_insert("rotation_quaternion", frame=f + 1)
 
-    swing("thigh_l", stride, 0.0)
-    swing("thigh_r", stride, math.pi)
+    swing("thigh_l", stride, 0.0, tuck=cross)
+    swing("thigh_r", stride, math.pi, tuck=cross)
     # the knee folds through the back half of that leg's stride
     swing("calf_l", stride * 1.25, math.pi * 1.15, fold='back')
     swing("calf_r", stride * 1.25, math.pi * 0.15, fold='back')
@@ -1020,12 +1051,23 @@ def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
     swing("farm_r", arm_swing * 0.50, math.pi * 1.9, fold='fwd')
 
     # the torso counter-rotates a little about the vertical
+    # The spine does two things at once and they have to be keyed together.
+    # It counter-rotates against the pelvis about the vertical, and it takes
+    # the pelvis roll back out - the hips are the root of the skeleton, so
+    # rolling them 9 degrees rolls the head with them and the figure lists
+    # like a ship. Done as a second pass this read rotation_quaternion without
+    # a frame_set, so it compounded whatever the first pass happened to leave
+    # behind rather than that frame's value, and bent her double.
     spine = bones.get("spine")
     if spine is not None:
         up = _local_axis(rig, spine, Vector((0.0, 0.0, 1.0)))
+        ax_s = _local_axis(rig, spine, fwd)
         for f in range(0, P + 1, step):
             t = 2.0 * math.pi * f / P
-            spine.rotation_quaternion = Quaternion(up, 0.10 * math.sin(t))
+            q = Quaternion(up, torso * math.sin(t))
+            if roll:
+                q = q @ Quaternion(ax_s, -roll * 0.85 * math.sin(t))
+            spine.rotation_quaternion = q
             spine.keyframe_insert("rotation_quaternion", frame=f + 1)
 
     # hips bob twice per stride and sway once, which is what makes a walk
@@ -1036,13 +1078,14 @@ def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
         for f in range(0, P + 1, step):
             t = 2.0 * math.pi * f / P
             hips.location = rest + Vector((0.0, 0.0, -bob * abs(math.sin(t)))) \
-                + side * (bob * 0.6 * math.sin(t))
+                + side * (bob * sway * math.sin(t))
             hips.keyframe_insert("location", frame=f + 1)
         axis = _local_axis(rig, hips, fwd)
         for f in range(0, P + 1, step):
             t = 2.0 * math.pi * f / P
-            hips.rotation_quaternion = Quaternion(axis, 0.06 * math.sin(t))
+            hips.rotation_quaternion = Quaternion(axis, roll * math.sin(t))
             hips.keyframe_insert("rotation_quaternion", frame=f + 1)
+
 
     for fc in action_fcurves(act):
         for kp in fc.keyframe_points:
