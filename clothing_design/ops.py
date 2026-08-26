@@ -75,8 +75,8 @@ def asset_path(name="default_character.blend"):
 
 
 CHARACTERS = {
-    'WOMAN': ("default_character.blend", "Camila"),
-    'MAN':   ("default_man.blend", "Kevin"),
+    'WOMAN': ("default_character.blend", "Nora"),
+    'MAN':   ("default_man.blend", "Theo"),
 }
 
 
@@ -284,7 +284,8 @@ class CD_OT_add_outfit(Operator):
     bl_idname = "cd.add_outfit"
     bl_label = "Add Outfit"
     bl_description = ("Build a complete outfit: several garments drafted and stacked on "
-                      "their own layers, worn from the inside out")
+                      "their own layers, in the order you would dress: bottoms "
+                      "first, then tops untucked over them, outerwear last")
     bl_options = {'REGISTER', 'UNDO'}
 
     outfit: EnumProperty(items=_outfit_items, name="Outfit",
@@ -311,6 +312,7 @@ class CD_OT_add_outfit(Operator):
         sim.setup_layers(context)
         if self.sew_now and made:
             bpy.ops.cd.sew(all_garments=True)
+            sim.relax_outfit(context)
         self.report({'INFO'}, "%s: %s" % (label, " over ".join(made)))
         return {'FINISHED'}
 
@@ -1003,20 +1005,43 @@ class CD_OT_sew(Operator):
         prev = scn.cd.garment_name
         start = scn.frame_current
         msgs = []
+        # the garments this one is worn over collide as their cages, so a
+        # finalized layer behaves the same as an unfinalized one
+        others = [o for o in scn.objects if o.cd.is_garment and o not in targets]
         for g in targets:
             scn.cd.garment_name = g.cd.garment
             scn.frame_set(start)
+            if len(targets) > 1:
+                # re-arrange over the layers already sewn beneath this one -
+                # when the outfit was drafted they were still flat panels
+                build.sync_garment(context, garment=g.cd.garment)
             sim.setup_cloth(context, g)
+            sim.kick_solver(context, g)
+            # hold the collar on the shoulders while the seams close; from 60%
+            # keep only the back collar - the part the garment hangs from - so
+            # the front can draw in to the neck before it is welded
+            pinned = sim.pin_shoulders(context, g)
+            hold = int(scn.cd.stitch_frames * sim.PIN_HOLD) if pinned else -1
             sim.set_gravity(g, scn.cd.stitch_gravity)
-            for _ in range(scn.cd.stitch_frames):
-                scn.frame_set(scn.frame_current + 1)
+            with sim.cages_only(others):
+                for i in range(scn.cd.stitch_frames):
+                    if i == hold:
+                        sim.pin_shoulders(context, g, torso_anchors=('TORSO_BACK',))
+                    scn.frame_set(scn.frame_current + 1)
             merged = 0
             if scn.cd.auto_close:
                 merged, _ = sim.close_seams(context, g)
+            sim.unpin_shoulders(g)
             sim.set_gravity(g, 1.0)
-            for _ in range(scn.cd.settle_frames):
-                scn.frame_set(scn.frame_current + 1)
+            with sim.cages_only(others):
+                for _ in range(scn.cd.settle_frames):
+                    scn.frame_set(scn.frame_current + 1)
             msgs.append("%s (%d welded)" % (g.cd.garment, merged))
+        # (A relax pass here was tried and reverted: taking the fabric in
+        # smooths a garment measured on its own, but on the body it drags an
+        # open-front jacket back down off the shoulders. Relax stays an
+        # outfit-level finish, where the layers underneath hold it up, and a
+        # button users can press.)
         scn.cd.garment_name = prev
         self.report({'INFO'}, "Sewn: " + ", ".join(msgs))
         return {'FINISHED'}
@@ -1183,11 +1208,45 @@ class CD_OT_settle(Operator):
         if ob is None:
             self.report({'ERROR'}, "No garment")
             return {'CANCELLED'}
+        # Add Outfit leaves its garments frozen (baked, solver dropped) so the
+        # layers stay where they settled; put a solver back if asked to run on
+        if not any(m.type == 'CLOTH' for m in ob.modifiers):
+            sim.ensure_collider(context, scn.cd.avatar)
+            sim.setup_layers(context)
+            sim.setup_cloth(context, ob)
         sim.set_gravity(ob, 1.0)
         end = scn.frame_current + scn.cd.settle_frames
         while scn.frame_current < end:
             scn.frame_set(scn.frame_current + 1)
         self.report({'INFO'}, "Settled to frame %d" % scn.frame_current)
+        return {'FINISHED'}
+
+
+class CD_OT_relax(Operator):
+    bl_idname = "cd.relax"
+    bl_label = "Relax"
+    bl_description = ("Finishing pass: soften the fabric and take it in a little so "
+                      "it wraps the body, freeze that shape, then let it rest. The "
+                      "weld bakes a ballooned mid-drape shape as the cloth's rest "
+                      "shape, and settling at fabric stiffness never lies it down")
+    bl_options = {'REGISTER'}
+
+    take_in: FloatProperty(name="Take In", default=0.06, min=0.0, max=0.3,
+                           description="How much the fabric is taken in while it wraps")
+
+    def execute(self, context):
+        ob = build.garment_object(context, create=False)
+        if ob is None:
+            self.report({'ERROR'}, "No garment")
+            return {'CANCELLED'}
+        if not any(m.type == 'CLOTH' for m in ob.modifiers):
+            sim.ensure_collider(context, context.scene.cd.avatar)
+            sim.setup_layers(context)
+            sim.setup_cloth(context, ob)
+        if not sim.relax_garment(context, ob, take_in=self.take_in):
+            self.report({'ERROR'}, "The garment has no cloth - sew it first")
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Relaxed %s to frame %d" % (ob.cd.garment, context.scene.frame_current))
         return {'FINISHED'}
 
 
@@ -1246,6 +1305,74 @@ class CD_OT_finalize(Operator):
         return {'FINISHED'}
 
 
+class CD_OT_animate(Operator):
+    bl_idname = "cd.animate"
+    bl_label = "Animate"
+    bl_description = ("Walk the avatar on the spot so you can watch a finalized "
+                      "garment move with the body. Play with Space; press again "
+                      "to re-key, or Rest Pose to clear it")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    period: IntProperty(name="Frames per Stride", default=32, min=8, max=120,
+                        description="Length of one full stride")
+    stride: FloatProperty(name="Stride", default=0.32, min=0.05, max=1.2,
+                          subtype='ANGLE',
+                          description="How far the legs swing")
+    arm_swing: FloatProperty(name="Arm Swing", default=0.26, min=0.0, max=1.2,
+                             subtype='ANGLE')
+    arm_down: FloatProperty(name="Lower Arms", default=0.75, min=0.0, max=1.4,
+                            subtype='ANGLE',
+                            description="Bring the arms in from the avatar's "
+                                        "drafting pose to a natural walking one")
+    play: BoolProperty(name="Play", default=True,
+                       description="Start playback once the walk is keyed")
+
+    @classmethod
+    def poll(cls, context):
+        av = context.scene.cd.avatar
+        return av is not None and avatar.find_armature(av) is not None
+
+    def execute(self, context):
+        scn = context.scene
+        act, msg = sim.walk_cycle(context, scn.cd.avatar, period=self.period,
+                                  stride=self.stride, arm_swing=self.arm_swing,
+                                  arm_down=self.arm_down)
+        if act is None:
+            self.report({'ERROR'}, msg)
+            return {'CANCELLED'}
+        bound = [o for o in scn.objects if o.cd.is_garment
+                 and any(m.type == 'ARMATURE' for m in o.modifiers)]
+        if not bound:
+            self.report({'WARNING'}, "%s - no garment is bound to the rig yet; "
+                                     "run Finalize with Bind To Armature on" % msg)
+        else:
+            self.report({'INFO'}, "%s; %d garment(s) following" % (msg, len(bound)))
+        if self.play and not context.screen.is_animation_playing:
+            bpy.ops.screen.animation_play()
+        return {'FINISHED'}
+
+
+class CD_OT_rest_pose(Operator):
+    bl_idname = "cd.rest_pose"
+    bl_label = "Rest Pose"
+    bl_description = "Stop the walk and put the avatar back in its rest pose"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        av = context.scene.cd.avatar
+        return av is not None and avatar.find_armature(av) is not None
+
+    def execute(self, context):
+        if context.screen.is_animation_playing:
+            bpy.ops.screen.animation_cancel(restore_frame=False)
+        rig = avatar.find_armature(context.scene.cd.avatar)
+        sim.clear_walk(rig)
+        context.scene.frame_set(context.scene.frame_start)
+        self.report({'INFO'}, "Rest pose restored")
+        return {'FINISHED'}
+
+
 # ---------------------------------------------------------------- workspace
 
 class CD_OT_build_workspace(Operator):
@@ -1278,7 +1405,7 @@ CLASSES = (
     CD_OT_auto_seam, CD_OT_add_seam, CD_OT_remove_seam, CD_OT_clear_seams,
     CD_OT_draw_pattern, CD_OT_grab, CD_OT_unsew, CD_OT_sew, CD_OT_setup_layers,
     CD_OT_garment_layer, CD_OT_setup_sim, CD_OT_drape, CD_OT_close_seams, CD_OT_settle,
-    CD_OT_reset_sim, CD_OT_finalize,
+    CD_OT_relax, CD_OT_reset_sim, CD_OT_finalize, CD_OT_animate, CD_OT_rest_pose,
     CD_OT_build_workspace, CD_OT_frame_view,
 )
 

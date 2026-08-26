@@ -51,7 +51,8 @@ LIMB_CHAINS = {
 # 164 cm waist on a figure standing in an A-pose.
 EXCLUDE_TORSO = ("upperarm", "forearm", "elbow", "wrist", "hand", "palm", "thumb",
                  "index", "mid", "ring", "pinky", "head", "eye", "teeth", "tongue",
-                 "jaw", "facial", "brow", "nose", "lip", "cheek", "ear")
+                 "jaw", "facial", "brow", "nose", "lip", "cheek", "ear",
+                 "leftarm", "rightarm")   # Mixamo upper arms have no "upperarm" in the name
 # Keywords identifying the verts belonging to each limb.
 LIMB_GROUPS = {
     "arm_l":   ("l_upperarm", "leftarm", "upper_arm.l"),
@@ -348,14 +349,17 @@ def slice_ok(m, z, min_cover=0.95, min_count=40):
 def neck_girth(m):
     """True neck circumference: the narrowest slice above the shoulders. The
     'neck' landmark sits at the neck base and includes the trapezius, which is
-    far too big to size a neckline from. Only complete rings are considered,
-    and the scan stops at the first slice the head mask has eaten into: past
-    that the profile decays towards zero and would give a doll's neck."""
+    far too big to size a neckline from. Only near-complete rings are
+    considered, and the scan stops once the head mask has eaten into the ring:
+    past that the profile decays towards zero and would give a doll's neck.
+    One missing sector is tolerated - on Mixamo-weighted rigs the head group
+    dominates far down the neck, and demanding a perfect ring would end the
+    scan at the trapezius and report the neck base as the neck."""
     z0 = z_of(m, "neck")
     best = girth_at(m, z0)
     z = z0
     while z < z0 + 0.13 and z < m["zmax"]:
-        if not slice_ok(m, z):
+        if not slice_ok(m, z, min_cover=0.90):
             break
         best = min(best, girth_at(m, z))
         z += 0.01
@@ -436,7 +440,21 @@ def limb_profile(pts, dom, keys, p0, p1, nbins=10):
             rads.append(last); ok = True
     if not ok:
         return None
-    return {"p0": list(p0), "p1": list(p1), "len": L, "rad": _smooth(rads, 1)}
+    # Near its root a limb merges into the torso, and how far the torso flesh
+    # leaks into the limb's vertex groups is a weight-painting style: Mixamo
+    # weights hand the whole deltoid (or half the glute) to the upper arm or
+    # thigh, and the root bins then read a 50 cm biceps on a 161 cm figure.
+    # Cap the root bins by the interior profile - a real limb never doubles
+    # its girth in its top fifth. The uncapped root is kept separately: it is
+    # wrong as a tube girth but right as the deltoid, which is what the
+    # shoulder point of a bodice is drafted from.
+    rad_root = rads[0]
+    if len(rads) >= 7:
+        cap = max(rads[3:7]) * 1.10
+        for i in range(3):
+            rads[i] = min(rads[i], cap)
+    return {"p0": list(p0), "p1": list(p1), "len": L,
+            "rad": _smooth(rads, 1), "rad_root": rad_root}
 
 
 def limb_radius_at(lp, t):
@@ -526,6 +544,26 @@ def measure(context, ob=None, force=False):
                 z += 0.01
             if best_z is not None:
                 lm["waist"] = best_z
+    except Exception:
+        pass
+    # and the chest: the fullest section between waist and shoulder, not the
+    # rig's chest bone. Where that bone sits is a rigging convention, not
+    # anatomy - CC4 puts it at 71 % of stature and Mixamo at 76 %, which is
+    # 8 cm on the same body and changes every armhole drafted from it. The
+    # widest cross-section is the bust line whatever rig is underneath.
+    try:
+        zw, zs = lm.get("waist"), lm.get("shoulder")
+        if zw is not None and zs is not None and zs > zw + 0.12:
+            best_z, best_g = None, -1.0
+            z = zw + 0.04
+            while z < zs - 0.04:
+                if slice_ok(m, z, min_cover=0.90):
+                    g = girth_at(m, z)
+                    if g > best_g:
+                        best_g, best_z = g, z
+                z += 0.01
+            if best_z is not None:
+                lm["chest"] = best_z
     except Exception:
         pass
     # likewise the hip: the widest section over the seat, not the pelvis bone

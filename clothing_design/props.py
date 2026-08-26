@@ -235,7 +235,10 @@ class CDScene(PropertyGroup):
     quality:     IntProperty(name="Quality", default=12, min=1, max=80)
     mass:        FloatProperty(name="Mass", default=0.28, min=0.001)
     sew_force:   FloatProperty(name="Sew Force", default=0.0, min=0.0,
-                               description="Max sewing force. 0 = unlimited (pulls seams fully closed)")
+                               description="Max sewing force. 0 = unlimited (pulls seams fully "
+                                           "closed; a heavy garment like the dress needs it to "
+                                           "seat its shoulders). A cap of 2-5 reduces how far a "
+                                           "light top rides up, at the cost of weaker stitching")
     fabric:      EnumProperty(items=FABRICS, name="Fabric", default='CRISP',
                               update=_apply_fabric,
                               description="Sets the stiffness values below")

@@ -41,11 +41,24 @@ def _neck_half(girth, df, db, fac=1.12):
 
 
 def _cap_pts(cw, cap_h):
-    back = patterns.bezier((cw * 0.5, 0.0), (cw * 0.30, cap_h * 0.45),
-                           (cw * 0.16, cap_h), (0.0, cap_h), 16)
-    front = patterns.bezier((0.0, cap_h), (-cw * 0.16, cap_h),
-                            (-cw * 0.30, cap_h * 0.45), (-cw * 0.5, 0.0), 16)
+    """A set-in sleeve cap: back half then front half, apex at x = 0.
+
+    A real cap is an S-curve - hollowed just above the underarm, full and
+    rounded over the head of the arm - and the front half is scooped a
+    little deeper than the back, because the front armhole is. Drawn as a
+    plain arc it comes out a tent, and a tent-shaped cap sewn into a curved
+    armhole is what puts those diagonal creases across the shoulder.
+    """
+    back = patterns.bezier((cw * 0.5, 0.0), (cw * 0.44, cap_h * 0.30),
+                           (cw * 0.28, cap_h * 0.95), (0.0, cap_h), 18)
+    front = patterns.bezier((0.0, cap_h), (-cw * 0.24, cap_h * 0.95),
+                            (-cw * 0.46, cap_h * 0.26), (-cw * 0.5, 0.0), 18)
     return front, back
+
+
+def _cap_len(cw, cap_h):
+    f, b = _cap_pts(cw, cap_h)
+    return _curve_len(f) + _curve_len(b)
 
 
 def _armhole_len(half, sh_x, arm_d, sh_drop):
@@ -67,7 +80,9 @@ def _measurements(m):
     lp = m.get("limbs", {}).get("arm_l")
     if lp:
         p0 = Vector(lp["p0"])
-        shoulder_half = abs((p0 - avatar.center_at(m, p0.z)).length) + avatar.limb_radius_at(lp, 0.0) * 0.6
+        # the deltoid: the uncapped limb root, not the biceps-safe tube radius
+        r0 = lp.get("rad_root", avatar.limb_radius_at(lp, 0.0))
+        shoulder_half = abs((p0 - avatar.center_at(m, p0.z)).length) + r0 * 0.6
     return z, g, shoulder_half
 
 
@@ -81,7 +96,8 @@ FIGURE = {
         neck_front=0.075, neck_back=0.022,      # scooped front, shallow back
         tank_front=0.095, tank_back=0.030,
         sh_drop=0.055, sh_x=0.93,               # sloped, narrower shoulder point
-        top_extra=0.0,                          # tops end at the hip line
+        top_extra=0.03,                         # cut past the hip: the stitch
+                                                # phase hoists a top a few cm
         shape_waist=True,                       # side seams follow the waist in
         hem_hip=1.0,                            # hem cut to the hip girth
         tee_sleeve=0.15, sleeve_hem=0.82,       # short sleeve, narrow cuff
@@ -91,7 +107,8 @@ FIGURE = {
         neck_front=0.060, neck_back=0.022,      # crew neck
         tank_front=0.085, tank_back=0.030,
         sh_drop=0.045, sh_x=1.0,                # squarer, full-width shoulder
-        top_extra=0.045,                        # tops cover the hip
+        top_extra=0.065,                        # tops cover the hip, plus the
+                                                # few cm the stitch hoists them
         shape_waist=False,                      # straight side seams
         hem_hip=0.98,                           # hem skims the hip
         tee_sleeve=0.20, sleeve_hem=0.88,       # longer sleeve, open cuff
@@ -102,6 +119,26 @@ FIGURE = {
 
 def _fig(m):
     return FIGURE.get(m.get("figure") or m.get("figure_auto") or 'WOMAN', FIGURE['WOMAN'])
+
+
+def _sleeve_height(cap_h, length, arm_total):
+    """Where the sleeve's UNDERARM line sits, as a fraction along the arm.
+
+    A limb piece is anchored at its local y = 0, and on a sleeve that line
+    is the underarm, not the middle of the piece: the cap rises above it and
+    the sleeve hangs below. Anchoring the piece's centre instead - which is
+    what this did - hung every sleeve about a third of the way down the arm,
+    left the shoulder bare between the armhole and the cap, and is why
+    sleeves read as loose tubes pinned to the elbows.
+    """
+    if arm_total <= 1e-6:
+        return 0.0
+    # Measured on both figures: the shoulder holds equally well anywhere in
+    # 0.02-0.22, but the sleeve only reaches the wrist near the top of that
+    # range - below it the cap is compressed into the armhole and the sleeve
+    # concertinas up the arm. (The old formula put this at 0.59, which is
+    # why sleeves used to hang off the elbows.)
+    return 0.22
 
 
 def _side_curve(hem, waist, top, n=7):
@@ -150,15 +187,17 @@ SHELF = 0.040   # how far the top of the shoulder sits above the arm joint
 
 
 def _bodice(m, fit, length_to, neck_depth, neck_half, arm_d, sh_x, sh_drop=0.050,
-            hem_half=None, split_hem=False, hem_dip=0.0, split_neck=False):
+            hem_half=None, split_hem=False, hem_dip=0.0, split_neck=False,
+            scye_x=None):
     z, g, _ = _measurements(m)
     f = _fig(m)
     w = g["chest"] * 0.5 * (1.0 + fit)
     half = w * 0.5
+    scye_x = half if scye_x is None else scye_x
     hem_half = _hem_half(m, fit, half, length_to) if hem_half is None else hem_half
     L = max(z["shoulder"] + SHELF - z[length_to], 0.12) + 0.03 + f["top_extra"]
 
-    armhole_L = patterns.bezier((half, -arm_d), (half, -arm_d * 0.45),
+    armhole_L = patterns.bezier((scye_x, -arm_d), (scye_x, -arm_d * 0.45),
                                 (sh_x + 0.035, -sh_drop - 0.02), (sh_x, -sh_drop), 12)
     armhole_R = [Vector((-p.x, p.y)) for p in reversed(armhole_L)]
     neck = patterns.bezier((neck_half, 0.0), (neck_half * 0.55, -neck_depth),
@@ -173,7 +212,7 @@ def _bodice(m, fit, length_to, neck_depth, neck_half, arm_d, sh_x, sh_drop=0.050
                            (hem_half, -L)])]
            if split_hem else
            [_seg("hem", [(-hem_half, -L), (hem_half, -L)])])
-    side_L, side_R = _sides(m, fit, half, hem_half, L, arm_d)
+    side_L, side_R = _sides(m, fit, scye_x, hem_half, L, arm_d)
     segs = hem + [
         side_L,
         ("arm_L",          armhole_L),
@@ -187,13 +226,17 @@ def _bodice(m, fit, length_to, neck_depth, neck_half, arm_d, sh_x, sh_drop=0.050
                       sh_x=sh_x, sh_drop=sh_drop)
 
 
-def _draft_top(m, fit, sleeveless=False):
+def _draft_top(m, fit, sleeveless=False, sh_ext=1.0):
     """Work out neckline, armhole and sleeve so the cap actually fits the armhole."""
     z, g, sh_half = _measurements(m)
     f = _fig(m)
     half = g["chest"] * 0.5 * (1.0 + fit) * 0.5
     sh_drop = f["sh_drop"]
-    sh_x = min(sh_half * f["sh_x"], half * 0.95)
+    # Outerwear is cut to the shoulder tip or a little past it (sh_ext): a
+    # shoulder seam that stops short leaves the deltoid outside the panel,
+    # and the armhole curve then starts inboard of the shoulder, so the top
+    # of the arm is bare between the body and the sleeve head.
+    sh_x = min(sh_half * f["sh_x"] * sh_ext, half * 0.98)
     df = f["neck_front"] if not sleeveless else f["tank_front"]
     db = f["neck_back"] if not sleeveless else f["tank_back"]
     ng = avatar.neck_girth(m)
@@ -205,29 +248,60 @@ def _draft_top(m, fit, sleeveless=False):
     biceps_r = avatar.limb_radius_at(lp, 0.12) if lp else 0.05
     biceps = 2.0 * math.pi * biceps_r
 
-    # armhole deep enough to take the arm
-    need = biceps * (1.30 if not sleeveless else 1.15)
-    lo = max(0.09, z["shoulder"] - z["chest"] + 0.03)
-    arm_d = _solve(lambda d: 2.0 * _armhole_len(half, sh_x, d, sh_drop), need, lo, 0.34)
-    ah = 2.0 * _armhole_len(half, sh_x, arm_d, sh_drop)
+    # The armhole DEPTH is anatomy: the shoulder line down to the armpit,
+    # plus a little drop for comfort. Solving the depth from a required
+    # length instead - which is what this used to do - drives the underarm
+    # down to the waist on a figure with a full arm, and the sleeve, sewn at
+    # the armpit where it belongs, then cannot reach it: the armhole seam
+    # never closes and the shoulder is left bare through the gap.
+    if lp:
+        z_armpit = Vector(lp["p0"]).z - lp.get("rad_root", biceps_r)
+    else:
+        z_armpit = z["chest"]
+    anat = (z["shoulder"] + SHELF) - z_armpit + 0.03
+
+    # The armhole has to measure the arm root it is sewn around, and it is
+    # allowed to drop below the armpit to get there - but only so far. Left
+    # to solve freely it reached the waist on a full arm; held to anatomy it
+    # was too short for any sleeve to fit. So: solve the depth, but never
+    # more than 10 cm below the armpit, and buy any remaining length
+    # sideways at the scye rather than going deeper still.
+    need = biceps * (1.35 if not sleeveless else 1.05)
+    arm_d = _solve(lambda t: 2.0 * _armhole_len(half, sh_x, t, sh_drop),
+                   need, max(0.10, anat), anat + 0.10)
+    scye = _solve(lambda e: 2.0 * _armhole_len(half + e, sh_x, arm_d, sh_drop),
+                  need, 0.0, 0.05)
+    scye_x = half + scye
+    ah = 2.0 * _armhole_len(scye_x, sh_x, arm_d, sh_drop)
     return dict(neck_half=neck_half, df=df, db=db, arm_d=arm_d, sh_x=sh_x,
-                sh_drop=sh_drop, half=half, armhole=ah, biceps=biceps, biceps_r=biceps_r,
+                sh_drop=sh_drop, half=half, scye_x=scye_x, armhole=ah,
+                biceps=biceps, biceps_r=biceps_r,
                 sleeve_hem=f["sleeve_hem"], tee_sleeve=f["tee_sleeve"])
 
 
-def _sleeve(d, fit, length):
-    """Sleeve whose cap curve matches the armhole it is sewn to. A cap longer
-    than its armhole is what gathers the fabric into a crumpled mess."""
-    target = d["armhole"] * 1.02
-    cap_h = d["arm_d"] * 0.45
-    cw = _solve(lambda w: _curve_len(_cap_pts(w, cap_h)[0]) + _curve_len(_cap_pts(w, cap_h)[1]),
-                target, 0.05, 0.90)
-    # never narrower than the arm; if it would be, flatten the cap and re-solve
-    floor = d["biceps"] * 1.06
-    if cw < floor:
-        cw = floor
-        cap_h = _solve(lambda h: -(_curve_len(_cap_pts(cw, h)[0]) + _curve_len(_cap_pts(cw, h)[1])),
-                       -target, 0.005, d["arm_d"] * 0.7)
+def _sleeve(d, fit, length, width_ease=1.06):
+    """A set-in sleeve, drafted the way one actually is: the sleeve is as
+    wide as the arm needs, and the cap *height* is then solved so the cap
+    measures the armhole it is sewn into.
+
+    Doing it the other way round - fixing a shallow cap and widening the
+    sleeve until it measured - is what produced a wide, droopy tube with a
+    flat head: the only way a short cap reaches the length of an armhole is
+    by getting very wide. Height first, width from the arm.
+    """
+    target = d["armhole"] * 1.02          # a little ease, eased in over the head
+    # The sleeve has to be narrower than the armhole is long, or there is no
+    # length left for the cap to rise in and it flattens into a tube sewn on
+    # sideways. Width just clears the arm; the cap takes the rest.
+    cw = max(d["biceps"] * width_ease, 0.05)
+    cw = min(cw, target * 0.82)
+    ceiling = d["arm_d"] * 0.95
+    cap_h = _solve(lambda h: _cap_len(cw, h), target, 0.02, ceiling)
+    if _cap_len(cw, cap_h) < target * 0.995:
+        # even a full-height cap is too short for this armhole: the arm is
+        # slim relative to the scye, so widen the sleeve to make up the rest
+        cap_h = ceiling
+        cw = _solve(lambda w: _cap_len(w, cap_h), target, cw, cw * 2.5)
     hw = cw * d.get("sleeve_hem", 0.90)
     front, back = _cap_pts(cw, cap_h)
     segs = [
@@ -243,9 +317,9 @@ def _sleeve(d, fit, length):
 def preset_tshirt(m, fit=0.14, sleeve_len=None):
     z, g, _ = _measurements(m)
     d = _draft_top(m, fit)
-    front, info = _bodice(m, fit, "hip", d["df"], d["neck_half"], d["arm_d"], d["sh_x"],
+    front, info = _bodice(m, fit, "hip", d["df"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                           sh_drop=d["sh_drop"])
-    back, _ = _bodice(m, fit, "hip", d["db"], d["neck_half"], d["arm_d"], d["sh_x"],
+    back, _ = _bodice(m, fit, "hip", d["db"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                       sh_drop=d["sh_drop"])
     sl = sleeve_len if sleeve_len is not None else d["tee_sleeve"]
     sleeve, cw, cap_h = _sleeve(d, fit, sl)
@@ -253,7 +327,7 @@ def preset_tshirt(m, fit=0.14, sleeve_len=None):
     # limb pieces are placed by their centre, so drop the sleeve until its cap
     # apex meets the shoulder joint
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
-    sleeve_h = ((cap_h + sl) * 0.5) / arm_total if arm_total > 1e-6 else 0.0
+    sleeve_h = _sleeve_height(cap_h, sl, arm_total)
 
     pieces = [
         dict(name="Front", segs=front, anchor='TORSO_FRONT', height=body_h, ease=0.018),
@@ -280,9 +354,9 @@ def preset_tshirt(m, fit=0.14, sleeve_len=None):
 def preset_tank(m, fit=0.10):
     z, g, _ = _measurements(m)
     d = _draft_top(m, fit, sleeveless=True)
-    front, info = _bodice(m, fit, "hip", d["df"], d["neck_half"], d["arm_d"], d["sh_x"],
+    front, info = _bodice(m, fit, "hip", d["df"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                           sh_drop=d["sh_drop"])
-    back, _ = _bodice(m, fit, "hip", d["db"], d["neck_half"], d["arm_d"], d["sh_x"],
+    back, _ = _bodice(m, fit, "hip", d["db"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                       sh_drop=d["sh_drop"])
     body_h = (z["shoulder"] + SHELF - info["L"] * 0.5 - m["zmin"]) / m["height"]
     pieces = [
@@ -425,9 +499,9 @@ def preset_jumpsuit(m, fit=0.10, sleeve_len=0.17, length_to="ankle"):
         return _solve(lambda hh: _curve_len([Vector((hh, 0.0)), Vector((hh * 0.35, -dip * 0.45)),
                                              Vector((0.0, -dip))]), _out_len, 0.02, 0.60)
     hem_half = _v_half(_dip)
-    front, info = _bodice(m, fit, "crotch", d["df"], d["neck_half"], d["arm_d"], d["sh_x"],
+    front, info = _bodice(m, fit, "crotch", d["df"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                           sh_drop=d["sh_drop"], hem_half=hem_half, split_hem=True, hem_dip=_dip)
-    back, _ = _bodice(m, fit, "crotch", d["db"], d["neck_half"], d["arm_d"], d["sh_x"],
+    back, _ = _bodice(m, fit, "crotch", d["db"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                       sh_drop=d["sh_drop"], hem_half=_v_half(_dip * 1.25), split_hem=True,
                       hem_dip=_dip * 1.25)
     sleeve, cw, cap_h = _sleeve(d, fit, sleeve_len)
@@ -458,7 +532,7 @@ def preset_jumpsuit(m, fit=0.10, sleeve_len=0.17, length_to="ankle"):
         return segs
 
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
-    sleeve_h = ((cap_h + sleeve_len) * 0.5) / arm_total if arm_total > 1e-6 else 0.0
+    sleeve_h = _sleeve_height(cap_h, sleeve_len, arm_total)
     leg_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("thigh_l", "calf_l"))
     leg_h = (L * 0.5) / leg_total if leg_total > 1e-6 else 0.25
     body_h = (z["shoulder"] + SHELF - info["L"] * 0.5 - m["zmin"]) / m["height"]
@@ -524,9 +598,9 @@ def preset_dress(m, fit=0.10, length_to="knee", flare=1.45, sleeve_len=0.0):
     z, g, _ = _measurements(m)
     d = _draft_top(m, fit, sleeveless=(sleeve_len <= 0.0))
     hem_half = g["hip"] * 0.5 * (1.0 + fit) * 0.5 * flare
-    front, info = _bodice(m, fit, length_to, d["df"], d["neck_half"], d["arm_d"], d["sh_x"], sh_drop=d["sh_drop"],
+    front, info = _bodice(m, fit, length_to, d["df"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"), sh_drop=d["sh_drop"],
                           hem_half=hem_half)
-    back, _ = _bodice(m, fit, length_to, d["db"], d["neck_half"], d["arm_d"], d["sh_x"], sh_drop=d["sh_drop"],
+    back, _ = _bodice(m, fit, length_to, d["db"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"), sh_drop=d["sh_drop"],
                       hem_half=hem_half)
     body_h = (z["shoulder"] + SHELF - info["L"] * 0.5 - m["zmin"]) / m["height"]
     pieces = [
@@ -542,7 +616,7 @@ def preset_dress(m, fit=0.10, length_to="knee", flare=1.45, sleeve_len=0.0):
     if sleeve_len > 0.0:
         sleeve, cw, cap_h = _sleeve(d, fit, sleeve_len)
         arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
-        sh = ((cap_h + sleeve_len) * 0.5) / arm_total if arm_total > 1e-6 else 0.0
+        sh = _sleeve_height(cap_h, sleeve_len, arm_total)
         pieces += [dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.014),
                    dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.014)]
         seams += [("Sleeve_L", "cap_front", "Front", "arm_L", True),
@@ -562,20 +636,37 @@ def _open_front(m, fit, d, length_to, overlap=0.02):
     hem_half = _hem_half(m, fit, half, length_to)
     L = max(z["shoulder"] + SHELF - z[length_to], 0.12) + 0.03 + f["top_extra"]
     arm_d, sh_x, sh_drop = d["arm_d"], d["sh_x"], d["sh_drop"]
+    scye_x = d.get("scye_x", half)
     nh = d["neck_half"]
-    side_L, _ = _sides(m, fit, half, hem_half, L, arm_d)
+    side_L, _ = _sides(m, fit, scye_x, hem_half, L, arm_d)
     # one HALF of the front: centre front (with a little overlap) out to the side
-    armhole = patterns.bezier((half, -arm_d), (half, -arm_d * 0.45),
+    armhole = patterns.bezier((scye_x, -arm_d), (scye_x, -arm_d * 0.45),
                               (sh_x + 0.035, -sh_drop - 0.02), (sh_x, -sh_drop), 12)
-    neck = patterns.bezier((nh, 0.0), (nh * 0.62, -d["df"] * 0.85),
-                           (nh * 0.22, -d["df"]), (0.0, -d["df"]), 10)
+    # The front neck is cut to the same depth as any other top. It was
+    # deepened by 4.5 cm at one point to keep lapels off an inner collar,
+    # and that is what made the jacket slide: a 12 cm V has nothing to catch
+    # on, so the garment runs down the body until the armholes stop it, and
+    # the shoulders end up bare. Measured against a t-shirt on the same
+    # avatar, this is the whole difference.
+    df = d["df"]
+    neck = patterns.bezier((nh, 0.0), (nh * 0.62, -df * 0.85),
+                           (nh * 0.22, -df), (0.0, -df), 10)
+    # The front edge is cut in three: open above the button, closed at it,
+    # open below. A jacket that is stitched shut from throat to hem is a
+    # pullover; one button holds it on the body and still shows lapels above
+    # and a vent below, which is how a jacket is actually worn.
+    L_w = z["shoulder"] + SHELF - z["waist"]
+    btn_top = min(max(L_w - 0.05, df + 0.06), L - 0.10)
+    btn_bot = btn_top + 0.09
     left = [
         _seg("hem",      [(-overlap, -L), (hem_half, -L)]),
         side_L,
         ("arm_L",        armhole),
         _seg("shoulder_L", [(sh_x, -sh_drop), (nh, 0.0)]),
         ("neck_L",       neck),
-        _seg("front_L",  [(0.0, -d["df"]), (-overlap, -L)]),
+        _seg("lapel_L",  [(0.0, -df), (0.0, -btn_top)]),
+        _seg("button_L", [(0.0, -btn_top), (0.0, -btn_bot)]),
+        _seg("vent_L",   [(0.0, -btn_bot), (-overlap, -L)]),
     ]
     right = [(n.replace("_L", "_R"), [Vector((-p[0], p[1])) for p in reversed(pts)])
              for n, pts in left]
@@ -583,25 +674,36 @@ def _open_front(m, fit, d, length_to, overlap=0.02):
     return left, right, L, half, overlap
 
 
-def preset_jacket(m, fit=0.16, length_to="hip", sleeve_len=None):
-    """Open-fronted jacket: two front halves, a back, and long sleeves."""
+def preset_jacket(m, fit=0.12, length_to="hip", sleeve_len=None, closed_front=True):
+    """Jacket: two front halves, a back and long sleeves. The fronts are sewn
+    together below the lapel V - a buttoned jacket. An unfastened open front
+    is marginal physics on any dress form (nothing anchors it against the
+    sleeves' weight, and it slides off one run in three); pass
+    closed_front=False if you want one anyway and style it by hand."""
     z, g, _ = _measurements(m)
     d = _draft_top(m, fit)
-    left, right, L, half, overlap = _open_front(m, fit, d, length_to)
-    back, info = _bodice(m, fit, length_to, d["db"], d["neck_half"], d["arm_d"], d["sh_x"],
+    # a sewn-shut front is butted edge to edge; only an open one gets the
+    # button-stand overlap, or the seam crosses the panels into a knot
+    left, right, L, half, overlap = _open_front(m, fit, d, length_to,
+                                                overlap=0.0 if closed_front else 0.02)
+    back, info = _bodice(m, fit, length_to, d["db"], d["neck_half"], d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                          sh_drop=d["sh_drop"])
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
-    sl = sleeve_len if sleeve_len is not None else max(0.20, arm_total * 0.88)
+    # cut past the wrist: a long sleeve takes up several centimetres bunching
+    # over the elbow, so one drafted to the arm's length settles short of it
+    sl = sleeve_len if sleeve_len is not None else max(0.20, arm_total * 1.08)
     sleeve, cw, cap_h = _sleeve(d, fit, sl)
-    sh = ((cap_h + sl) * 0.5) / arm_total if arm_total > 1e-6 else 0.0
+    sh = _sleeve_height(cap_h, sl, arm_total)
     body_h = (z["shoulder"] + SHELF - L * 0.5 - m["zmin"]) / m["height"]
-    off = _arc_angle(m, z["chest"], (half - overlap) * 0.5)
+    # closed: both halves arranged meeting at centre front, where they are
+    # sewn. Open: spun apart so the lapels hang loose to either side.
+    off = 0.0 if closed_front else _arc_angle(m, z["chest"], (half - overlap) * 0.5)
     pieces = [
-        dict(name="Front_L", segs=left,  anchor='TORSO_FRONT', height=body_h, ease=0.024, spin=off),
-        dict(name="Front_R", segs=right, anchor='TORSO_FRONT', height=body_h, ease=0.024, spin=-off),
-        dict(name="Back",    segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.024),
-        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.020),
-        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.020),
+        dict(name="Front_L", segs=left,  anchor='TORSO_FRONT', height=body_h, ease=0.034, spin=off),
+        dict(name="Front_R", segs=right, anchor='TORSO_FRONT', height=body_h, ease=0.034, spin=-off),
+        dict(name="Back",    segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.034),
+        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.032),
+        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.032),
     ]
     seams = [
         ("Front_L", "side_L", "Back", "side_L", False),
@@ -615,6 +717,9 @@ def preset_jacket(m, fit=0.16, length_to="hip", sleeve_len=None):
         ("Sleeve_R", "cap_back", "Back", "arm_R", True),
         ("Sleeve_R", "under_front", "Sleeve_R", "under_back", True),
     ]
+    if closed_front:
+        # just the button: the lapels above it and the vent below stay open
+        seams.append(("Front_L", "button_L", "Front_R", "button_R", True))
     return pieces, seams
 
 
@@ -650,9 +755,9 @@ def preset_hoodie(m, fit=0.20, length_to="hip", sleeve_len=None):
     ng = avatar.neck_girth(m)
     nh = d["neck_half"] * 1.12
     dfh, dbh = d["df"] * 1.15, d["db"] * 1.3
-    front, info = _bodice(m, fit, length_to, dfh, nh, d["arm_d"], d["sh_x"],
+    front, info = _bodice(m, fit, length_to, dfh, nh, d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                           sh_drop=d["sh_drop"], split_neck=True)
-    back, _ = _bodice(m, fit, length_to, dbh, nh, d["arm_d"], d["sh_x"],
+    back, _ = _bodice(m, fit, length_to, dbh, nh, d["arm_d"], d["sh_x"], scye_x=d.get("scye_x"),
                       sh_drop=d["sh_drop"], split_neck=True)
     # the hood's neck edge has to measure the same as the neckline it joins
     nl_f = _curve_len(patterns.bezier((nh, 0.0), (nh * 0.55, -dfh),
@@ -662,16 +767,18 @@ def preset_hoodie(m, fit=0.20, length_to="hip", sleeve_len=None):
     hood_f, hood_b = max(0.03, nl_f / 1.005), max(0.03, nl_b / 1.005)
     hood_h = max(0.12, ng * 0.62)
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
-    sl = sleeve_len if sleeve_len is not None else max(0.20, arm_total * 0.88)
+    # cut past the wrist: a long sleeve takes up several centimetres bunching
+    # over the elbow, so one drafted to the arm's length settles short of it
+    sl = sleeve_len if sleeve_len is not None else max(0.20, arm_total * 1.08)
     sleeve, cw, cap_h = _sleeve(d, fit, sl)
-    sh = ((cap_h + sl) * 0.5) / arm_total if arm_total > 1e-6 else 0.0
+    sh = _sleeve_height(cap_h, sl, arm_total)
     body_h = (z["shoulder"] + SHELF - info["L"] * 0.5 - m["zmin"]) / m["height"]
     head_h = (z["neck"] + ng * 0.30 - m["zmin"]) / m["height"]
     pieces = [
-        dict(name="Front", segs=front, anchor='TORSO_FRONT', height=body_h, ease=0.026),
-        dict(name="Back",  segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.026),
-        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.022),
-        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.022),
+        dict(name="Front", segs=front, anchor='TORSO_FRONT', height=body_h, ease=0.036),
+        dict(name="Back",  segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.036),
+        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.034),
+        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.034),
         # spun towards the back so the hood lies behind the head rather than
         # collapsing over the face, which is where an unworn hood belongs
         dict(name="Hood_L", segs=_hood(hood_f, hood_b, hood_h, False),
@@ -712,16 +819,21 @@ PRESETS = {
 }
 
 # Complete outfits: (label, figure, [(preset, ease), ...]) worn from the inside out.
+# Trousers and skirts are worn FIRST, tops untucked over the waistband -
+# the order people actually dress in. A top sewn under the trousers leaves
+# its hem beneath the waistband, and trousers closing over a slippery shirt
+# instead of skin slide down a low-rise hip exactly like beltless trousers
+# over an untucked shirt do in life.
 OUTFITS = {
-    'M_CASUAL':  ("Casual",         'MAN',   [('TSHIRT', 0.10), ('TROUSERS', 0.12), ('JACKET', 0.18)]),
-    'M_STREET':  ("Streetwear",     'MAN',   [('TSHIRT', 0.10), ('TROUSERS', 0.14), ('HOODIE', 0.22)]),
+    'M_CASUAL':  ("Casual",         'MAN',   [('TROUSERS', 0.12), ('TSHIRT', 0.10), ('JACKET', 0.13)]),
+    'M_STREET':  ("Streetwear",     'MAN',   [('TROUSERS', 0.14), ('TSHIRT', 0.10), ('HOODIE', 0.22)]),
     'M_WORK':    ("Workwear",       'MAN',   [('TSHIRT', 0.10), ('JUMPSUIT', 0.14)]),
-    'M_LAYERED': ("Full Layers",    'MAN',   [('TANK', 0.07), ('TSHIRT', 0.12), ('TROUSERS', 0.13),
-                                              ('JACKET', 0.20)]),
-    'W_CASUAL':  ("Casual",         'WOMAN', [('TANK', 0.08), ('TROUSERS', 0.10), ('JACKET', 0.16)]),
-    'W_SUMMER':  ("Summer",         'WOMAN', [('TANK', 0.08), ('SKIRT', 0.10)]),
-    'W_DRESSED': ("Dress & Jacket", 'WOMAN', [('DRESS', 0.09), ('JACKET', 0.16)]),
-    'W_STREET':  ("Streetwear",     'WOMAN', [('TSHIRT', 0.10), ('TROUSERS', 0.12), ('HOODIE', 0.20)]),
+    'M_LAYERED': ("Full Layers",    'MAN',   [('TROUSERS', 0.13), ('TANK', 0.07), ('TSHIRT', 0.12),
+                                              ('JACKET', 0.15)]),
+    'W_CASUAL':  ("Casual",         'WOMAN', [('TROUSERS', 0.10), ('TANK', 0.08), ('JACKET', 0.12)]),
+    'W_SUMMER':  ("Summer",         'WOMAN', [('SKIRT', 0.10), ('TANK', 0.08)]),
+    'W_DRESSED': ("Dress & Jacket", 'WOMAN', [('DRESS', 0.09), ('JACKET', 0.13)]),
+    'W_STREET':  ("Streetwear",     'WOMAN', [('TROUSERS', 0.12), ('TSHIRT', 0.10), ('HOODIE', 0.20)]),
     'W_WORK':    ("Workwear",       'WOMAN', [('TSHIRT', 0.10), ('JUMPSUIT', 0.12)]),
 }
 

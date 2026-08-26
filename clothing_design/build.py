@@ -255,6 +255,56 @@ def _chain_bmverts(ob, seg, vmap):
     return [vmap[i] for i in idx if i in vmap]
 
 
+def under_bvh(context, garment):
+    """BVH of the body plus every garment worn under this one, at their
+    current shapes.
+
+    An outer garment arranged against the bare body starts only its own ease
+    away from the skin, while the shirt beneath it occupies a shell several
+    times thicker than that - so the jacket is laid out inside the shirt and
+    the simulation has no way to sort that out afterwards. Arranging against
+    what is actually underneath is what makes layering hold.
+    """
+    from mathutils.bvhtree import BVHTree
+    scn = context.scene
+    av = scn.cd.avatar
+    ob_g = bpy.data.objects.get(GARMENT_PREFIX + garment)
+    layer = ob_g.cd.layer if ob_g is not None else 0
+    unders = [o for o in scn.objects
+              if o.cd.is_garment and o.data and len(o.data.vertices)
+              and o.cd.garment != garment and o.cd.layer < layer]
+    if not unders:
+        return avatar.body_bvh(context)
+    from . import sim as _sim
+    verts, tris = [], []
+    for src in [av] + unders:
+        if src is None or src.type != 'MESH':
+            continue
+        # Measure the under-layer by its simulation cage, not its display
+        # shape. A finalized garment carries subdivision and solidify, and
+        # arranging the next layer against that inflated shell laid a
+        # t-shirt 20 cm low - the same garment sewn over an unfinalized one
+        # sat correctly. What is underneath should not depend on whether it
+        # happens to have been finalized yet.
+        with _sim.sim_cage_only(src):
+            context.view_layer.update()
+            dg = context.evaluated_depsgraph_get()
+            ev = src.evaluated_get(dg)
+            try:
+                me = ev.to_mesh()
+                me.calc_loop_triangles()
+            except Exception:
+                continue
+            mw = ev.matrix_world
+            base = len(verts)
+            verts += [mw @ v.co for v in me.vertices]
+            tris += [tuple(base + i for i in t.vertices) for t in me.loop_triangles]
+            ev.to_mesh_clear()
+    if not tris:
+        return avatar.body_bvh(context)
+    return BVHTree.FromPolygons(verts, tris)
+
+
 def sync_garment(context, report=None, garment=None):
     """Rebuild the 3D garment from its pattern pieces."""
     scn = context.scene
@@ -267,7 +317,7 @@ def sync_garment(context, report=None, garment=None):
 
     m = avatar.measure(context)
     fwd, side = avatar.basis(scn.cd.facing)
-    bvh = avatar.body_bvh(context) if scn.cd.keep_off_body else None
+    bvh = under_bvh(context, g) if scn.cd.keep_off_body else None
 
     bm = bmesh.new()
     dl = bm.verts.layers.deform.verify()

@@ -242,6 +242,7 @@ class CD_PT_sim(_Base, Panel):
         row = L.row(align=True)
         row.operator("cd.close_seams", icon='AUTOMERGE_ON')
         row.operator("cd.settle", icon='FRAME_NEXT')
+        row.operator("cd.relax", icon='MOD_CLOTH')
         row = L.row(align=True)
         row.scale_y = 1.2
         row.operator("cd.grab", icon='VIEW_PAN')
@@ -280,6 +281,20 @@ class CD_PT_finalize(_Base, Panel):
         col.prop(scn.cd, "thickness")
         col.prop(scn.cd, "bind_armature")
         L.operator("cd.finalize", icon='CHECKMARK')
+
+        # Walking the avatar is the last step: a garment that looks right on a
+        # still figure can still slide, gape at the armhole or clip through a
+        # thigh once the body moves.
+        bound = [o for o in scn.objects if o.cd.is_garment
+                 and any(m.type == 'ARMATURE' for m in o.modifiers)]
+        box = L.box()
+        box.label(text="Test On The Move", icon='ARMATURE_DATA')
+        row = box.row(align=True)
+        row.scale_y = 1.2
+        row.operator("cd.animate", icon='PLAY')
+        row.operator("cd.rest_pose", text="", icon='LOOP_BACK')
+        if not bound:
+            box.label(text="Finalize with Bind To Armature first", icon='INFO')
 
 
 class CD_PT_workspace(_Base, Panel):

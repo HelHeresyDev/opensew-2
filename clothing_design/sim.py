@@ -1,7 +1,7 @@
 # Clothing Design - cloth simulation, draping and finalising.
 import bpy, bmesh, math
 from contextlib import contextmanager
-from mathutils import Vector
+from mathutils import Vector, Quaternion
 from . import patterns, build
 
 COLLIDER_COLL = "CD_Colliders"
@@ -36,8 +36,11 @@ def make_collidable(ob):
     if cs:
         cs.thickness_outer = 0.002
         cs.thickness_inner = 0.006
-        cs.damping_factor = 0.25
-        cs.cloth_friction = 5.0
+        cs.damping_factor = 0.5
+        # fabric on fabric is not slick: with the default 5 an open jacket
+        # slides off the shoulders of a layered outfit while its sleeve seams
+        # pull it towards the arms
+        cs.cloth_friction = 60.0
     return mod
 
 
@@ -90,7 +93,7 @@ def ensure_collider(context, av):
         cs.thickness_outer = 0.002
         cs.thickness_inner = 0.02
         cs.damping_factor = 0.3
-        cs.cloth_friction = 5.0
+        cs.cloth_friction = 60.0
     return mod
 
 
@@ -120,10 +123,12 @@ def setup_cloth(context, ob):
     s.shrink_min = 0.0
 
     cs = mod.collision_settings
-    cs.collision_quality = 4
+    # 4 lets a collar tunnel into the neck when the shoulder pin releases
+    # and the neckline snaps in; 6 catches it
+    cs.collision_quality = 6
     cs.distance_min = cd.coll_distance
     cs.damping = 0.3
-    cs.friction = 5.0
+    cs.friction = 15.0
     cs.use_self_collision = cd.self_collision
     cs.self_distance_min = max(0.001, cd.coll_distance * 0.5)
     cs.self_friction = 2.0
@@ -164,6 +169,32 @@ def sim_cage_only(ob):
         if m.type in DISPLAY_MODS and m.show_viewport:
             m.show_viewport = False
             off.append(m)
+    try:
+        yield
+    finally:
+        for m in off:
+            m.show_viewport = True
+
+
+@contextmanager
+def cages_only(obs):
+    """Drop the display modifiers on a set of objects for the duration.
+
+    A garment used as a collider should present the surface it was simulated
+    as, not the one it is displayed as. A finalized garment carries
+    subdivision and solidify, and cloth simulated against that - a dense,
+    double-walled shell - behaves quite differently: a t-shirt sewn over
+    finalized trousers ended up 13 cm lower than the same t-shirt sewn over
+    the same trousers before they were finalized.
+    """
+    off = []
+    for ob in obs:
+        if ob is None:
+            continue
+        for m in ob.modifiers:
+            if m.type in DISPLAY_MODS and m.show_viewport:
+                m.show_viewport = False
+                off.append(m)
     try:
         yield
     finally:
@@ -499,6 +530,20 @@ def close_seams(context, ob):
         if mod.type == 'CLOTH':
             ob.modifiers.remove(mod)
     merged, skipped = weld_seams(ob, scn.cd.weld_dist)
+    # A weld merges each seam pair to its midpoint. Where the two edges sit
+    # either side of a body ridge - the collar ends astride the trapezius -
+    # that midpoint lands inside the body, and a cloth vert that starts a
+    # solve inside a collider is trapped there for good. Push them back out
+    # while the mesh is being edited anyway.
+    from . import avatar as _av
+    bvh = _av.body_bvh(context)
+    if bvh is not None:
+        for v in ob.data.vertices:
+            hit = bvh.find_nearest(v.co)
+            if hit is not None and hit[0] is not None:
+                gap = (v.co - hit[0]).dot(hit[1])
+                if gap < 0.002:
+                    v.co = hit[0] + hit[1] * 0.003
     setup_cloth(context, ob)
     for mod in ob.modifiers:
         if mod.type == 'CLOTH':
@@ -524,3 +569,489 @@ def set_gravity(ob, factor):
                 mod.settings.effector_weights.gravity = factor
             except Exception:
                 pass
+
+
+PIN_GROUP = "CD_PIN_SHOULDER"
+# fraction of the stitch phase that holds the full collar; after it only the
+# back collar stays held (1.0 = held to the weld)
+PIN_HOLD = 0.6
+
+
+def pin_shoulders(context, ob, torso_anchors=('TORSO_FRONT', 'TORSO_BACK')):
+    """Hold the torso panels' collar line still while the seams stitch closed.
+
+    A sleeved top is sewn to sleeves already wrapped around arms held out and
+    down, and those cap seams pull the whole garment down the body while it
+    has nothing to hang from yet. Alone on the body, friction wins; over a
+    layered outfit it does not, and the jacket ends up around the waist.
+    Pinning the collar band during the stitch is the tailor's hand holding
+    the shoulders on the dress form; the weld then takes over and the settle
+    runs unpinned. Calling it again with only TORSO_BACK re-pins just the
+    back collar - the part a jacket actually hangs from - so the front can
+    draw in to the neck before it is welded."""
+    from . import build, avatar as _av
+    m = _av.measure(context)
+    if m is None:
+        return False
+    pieces = build.garment_pieces(context, ob.cd.garment)
+    anchors = {p.name: p.cd.anchor for p in pieces}
+    if not any(a in ('ARM_L', 'ARM_R') for a in anchors.values()):
+        return False                      # nothing pulls a sleeveless top down
+    torso = {n for n, a in anchors.items() if a in torso_anchors}
+    if not torso:
+        return False
+    z_lo = _av.z_of(m, "shoulder") - 0.01
+    gname = {g.index: g.name for g in ob.vertex_groups}
+    vg = ob.vertex_groups.get(PIN_GROUP)
+    if vg:
+        ob.vertex_groups.remove(vg)
+    vg = ob.vertex_groups.new(name=PIN_GROUP)
+    mw = ob.matrix_world
+    idx = [v.index for v in ob.data.vertices
+           if (mw @ v.co).z >= z_lo
+           and any(gname.get(g.group) in torso for g in v.groups if g.weight > 0.5)]
+    if len(idx) < 6:
+        ob.vertex_groups.remove(vg)
+        return False
+    vg.add(idx, 1.0, 'REPLACE')
+    for mod in ob.modifiers:
+        if mod.type == 'CLOTH':
+            mod.settings.vertex_group_mass = PIN_GROUP
+            mod.settings.pin_stiffness = 25.0
+    return True
+
+
+def unpin_shoulders(ob):
+    for mod in ob.modifiers:
+        if mod.type == 'CLOTH' and mod.settings.vertex_group_mass == PIN_GROUP:
+            mod.settings.vertex_group_mass = ""
+    vg = ob.vertex_groups.get(PIN_GROUP)
+    if vg:
+        ob.vertex_groups.remove(vg)
+
+
+def kick_solver(context, ob):
+    """Initialise a freshly built cloth solver at the current frame.
+
+    Blender keys a modifier's point cache by name, so a rebuilt "CD_Cloth"
+    inherits the cache left by the pre-weld mesh - a different vertex count,
+    which evaluates to garbage and drops the garment into free fall. Stepping
+    onto the cache's own start frame is what makes the solver re-initialise
+    from the mesh instead of reading that cache.
+    """
+    scn = context.scene
+    scn.frame_set(scn.frame_current)
+    try:
+        dg = context.evaluated_depsgraph_get()
+        ev = ob.evaluated_get(dg)
+        ev.to_mesh()
+        ev.to_mesh_clear()
+    except Exception:
+        pass
+
+
+def relax_garment(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.0,
+                  frames=60, relax_frames=90):
+    """Finishing pass: steam the garment onto the body, then let it rest.
+
+    The weld bakes the mid-drape shape as the cloth's new rest shape, and at
+    fabric stiffness the bending springs then *hold* that ballooned memory -
+    a settle can run forever without the garment ever lying down (measured:
+    150 extra frames moved the chest standoff by 1 mm). This pass drops the
+    bending to near-zero and takes the fabric in a little so it wraps the
+    body (the take-in is also what keeps a soft garment from sliding off the
+    shoulders - relaxing without any pull lost the jacket to the ribcage),
+    freezes that as the new rest shape, and re-settles at a soft but held
+    stiffness so the result reads as resting cloth, not shrink wrap. The
+    re-settle is long because here it actually does something: settling at
+    fabric stiffness never lies a garment down (the rest shape holds it),
+    but at bending 8 a standing collar has time to fall onto the shoulders.
+    """
+    scn = context.scene
+    cloth = next((m for m in ob.modifiers if m.type == 'CLOTH'), None)
+    if cloth is None:
+        ensure_collider(context, scn.cd.avatar)
+        setup_layers(context)
+        cloth = setup_cloth(context, ob)
+        kick_solver(context, ob)
+    if cloth is None:
+        return False
+    st = cloth.settings
+    st.bending_stiffness = phase_bend
+    if take_in > 0.0:
+        st.shrink_min = take_in
+    cloth.point_cache.frame_end = max(cloth.point_cache.frame_end,
+                                      scn.frame_current + frames + relax_frames + 10)
+    for g2 in [o for o in scn.objects if o.cd.is_garment]:
+        for m2 in g2.modifiers:
+            if m2.type == 'CLOTH':
+                m2.point_cache.frame_end = max(m2.point_cache.frame_end,
+                                               scn.frame_current + frames + relax_frames + 10)
+    for _ in range(frames):
+        scn.frame_set(scn.frame_current + 1)
+    bake_shape(context, ob)
+    for m in list(ob.modifiers):
+        if m.type == 'CLOTH':
+            ob.modifiers.remove(m)
+    lift_off_layers(context, ob)
+    setup_cloth(context, ob)
+    cloth = next(m for m in ob.modifiers if m.type == 'CLOTH')
+    cloth.settings.bending_stiffness = relax_bend
+    cloth.settings.shrink_min = 0.0
+    kick_solver(context, ob)
+    for _ in range(relax_frames):
+        scn.frame_set(scn.frame_current + 1)
+    return True
+
+
+# The finishing pass relaxes the OUTERMOST garment only - the one actually
+# on show. Taking an inner top in rolls its collar up the neck and it stands
+# proud of whatever is worn over it, and softening trousers slides their
+# waistband down the hips (the crisp yoke is what keeps them up). Inner
+# layers still get lifted clear of each other, which is what stopped a tank
+# poking through the jacket; they just do not get shrunk.
+RELAX_SKIP = ("trouser", "skirt", "jumpsuit")
+
+
+def worn_over_bvh(context, ob):
+    """BVH of everything this garment is worn over: the body plus every
+    inner layer, at their current shapes."""
+    from mathutils.bvhtree import BVHTree
+    verts, tris = [], []
+    under = [context.scene.cd.avatar] + [g for g in garment_layers(context)
+                                         if g is not ob and g.cd.layer < ob.cd.layer]
+    for src in under:
+        if src is None or src.type != 'MESH':
+            continue
+        with sim_cage_only(src):
+            context.view_layer.update()
+            e = src.evaluated_get(context.evaluated_depsgraph_get())
+            try:
+                me = e.to_mesh()
+                me.calc_loop_triangles()
+            except Exception:
+                continue
+            mw = e.matrix_world
+            base = len(verts)
+            verts += [mw @ v.co for v in me.vertices]
+            tris += [tuple(base + i for i in t.vertices) for t in me.loop_triangles]
+            e.to_mesh_clear()
+    if not tris:
+        return None
+    return BVHTree.FromPolygons(verts, tris)
+
+
+def lift_off_layers(context, ob, clearance=0.007, max_move=0.03):
+    """Push the garment's base mesh clear of everything worn under it.
+
+    Taking a garment in pulls it hard against the inner layers, and the
+    solver's collision cannot always hold a thin shirt against that pull:
+    the jacket ends up drawn through the tank, which then pokes out of it
+    in patches. This runs on the baked shape, before the solver restarts,
+    so the relaxed garment starts outside everything it is worn over."""
+    bvh = worn_over_bvh(context, ob)
+    if bvh is None:
+        return 0
+    mw = ob.matrix_world
+    inv = mw.inverted()
+    moved = 0
+    for v in ob.data.vertices:
+        p = mw @ v.co
+        hit = bvh.find_nearest(p)
+        if hit is None or hit[0] is None:
+            continue
+        loc, nor = hit[0], hit[1]
+        gap = (p - loc).dot(nor)
+        if gap >= clearance:
+            continue
+        v.co = inv @ (p + nor * min(clearance - gap, max_move))
+        moved += 1
+    if moved:
+        ob.data.update()
+    return moved
+
+
+def garment_hover(context, ob):
+    """Median standoff between the garment's torso band and whatever it is
+    worn over - the body plus every inner layer - in metres. Measuring to
+    the body alone reads a jacket sitting snugly on a t-shirt as ballooned,
+    because the shirt itself is a centimetre thick."""
+    from . import avatar as _av
+    m = _av.measure(context)
+    bvh = worn_over_bvh(context, ob)
+    if m is None or bvh is None:
+        return 0.0
+    z_lo = _av.z_of(m, "waist")
+    z_hi = _av.z_of(m, "shoulder") - 0.03
+    dg = context.evaluated_depsgraph_get()
+    ev = ob.evaluated_get(dg)
+    mw = ev.matrix_world
+    gaps = []
+    for v in ev.data.vertices:
+        p = mw @ v.co
+        if z_lo < p.z < z_hi and abs(p.x) < 0.16:
+            hit = bvh.find_nearest(p)
+            if hit is not None and hit[0] is not None:
+                gaps.append((p - hit[0]).length)
+    gaps.sort()
+    return gaps[len(gaps) // 2] if gaps else 0.0
+
+
+def freeze_garment(context, ob):
+    """Bake the simulated shape and drop the solver, keeping the collision
+    modifier: the garment becomes finished, static clothing that outer
+    layers still drape against."""
+    if not any(m.type == 'CLOTH' for m in ob.modifiers):
+        return False
+    bake_shape(context, ob)
+    for m in list(ob.modifiers):
+        if m.type == 'CLOTH':
+            ob.modifiers.remove(m)
+    return True
+
+
+def relax_outfit(context):
+    """Finish the outfit: freeze the under-layers where they settled, then
+    run the relax pass over the outerwear. Freezing matters - the relax
+    advances the simulation, and a low-rise waistband that held for the
+    normal settle window will creep down the hips given another hundred
+    frames of sim it was never meant to run."""
+    scn = context.scene
+    prev = scn.cd.garment_name
+    layers = garment_layers(context)
+    outermost = layers[-1] if layers else None
+    plan = [(g, g is outermost and not any(k in g.cd.garment.lower() for k in RELAX_SKIP))
+            for g in layers]
+    # Freeze the whole outfit first, then relax exactly one garment at a
+    # time. Relaxing advances the scene by a hundred frames, and any other
+    # garment still carrying a solver would drift through them unwatched -
+    # which is precisely how an inner tank ends up poking out of the jacket
+    # worn over it. A frozen garment holds its shape and still collides.
+    for g, _ in plan:
+        freeze_garment(context, g)
+    n = 0
+    # innermost first: an outer layer is lifted, measured and relaxed against
+    # inner layers already in their final shape - what it is really worn over
+    for g, relaxes in plan:
+        # De-interleave first, always. A jacket sleeve is arranged around the
+        # arm, not around the arm plus the shirt already on it, so outerwear
+        # can come out of the sew stage threaded through the layer beneath -
+        # and a garment already tangled measures as snug, so leaving this to
+        # the relax test would let exactly the worst case slip through.
+        moved = lift_off_layers(context, g)
+        if not relaxes:
+            continue
+        # a garment already lying down is left alone; 1 cm of take-in per
+        # centimetre of standoff beyond the collision gap layered cloth needs
+        # capped at 6%: taking a garment in shortens it as well as narrowing
+        # it, and past this the hem climbs far enough to read as cropped
+        take = min(0.06, max(0.0, (garment_hover(context, g) - 0.012) * 10.0))
+        # anything that had to be lifted is re-seated even if it now measures
+        # snug: the lift leaves it standing off the layer it was pulled out of
+        if moved > max(20, len(g.data.vertices) // 100):
+            take = max(take, 0.03)
+        if take >= 0.02:
+            scn.cd.garment_name = g.cd.garment
+            if relax_garment(context, g, take_in=take):
+                n += 1
+            freeze_garment(context, g)
+    scn.cd.garment_name = prev
+    return n
+
+
+# ---------------------------------------------------------------- walk test
+
+# Bone roles for the walk cycle, in the same lowercase-substring style the
+# measuring code uses, so a CC4, Mixamo or Rigify character all resolve.
+WALK_BONES = {
+    "hips":    ["mixamorig:hips", "cc_base_pelvis", "pelvis", "hips"],
+    "spine":   ["mixamorig:spine1", "cc_base_spine01", "spine.002", "spine01", "spine"],
+    "thigh_l": ["mixamorig:leftupleg", "cc_base_l_thigh", "thigh.l"],
+    "thigh_r": ["mixamorig:rightupleg", "cc_base_r_thigh", "thigh.r"],
+    "calf_l":  ["mixamorig:leftleg", "cc_base_l_calf", "shin.l"],
+    "calf_r":  ["mixamorig:rightleg", "cc_base_r_calf", "shin.r"],
+    "foot_l":  ["mixamorig:leftfoot", "cc_base_l_foot", "foot.l"],
+    "foot_r":  ["mixamorig:rightfoot", "cc_base_r_foot", "foot.r"],
+    "arm_l":   ["mixamorig:leftarm", "cc_base_l_upperarm", "upper_arm.l"],
+    "arm_r":   ["mixamorig:rightarm", "cc_base_r_upperarm", "upper_arm.r"],
+    "farm_l":  ["mixamorig:leftforearm", "cc_base_l_forearm", "forearm.l"],
+    "farm_r":  ["mixamorig:rightforearm", "cc_base_r_forearm", "forearm.r"],
+}
+
+WALK_ACTION = "CD_Walk"
+
+
+def _local_axis(rig, pb, world_axis):
+    """The bone-local axis that points along a world axis in the rest pose.
+
+    Rigs disagree about which way a bone's own X, Y and Z point, so keying a
+    named local axis swings one character's leg forward and another's
+    sideways. Converting the world axis into each bone's rest frame keeps the
+    same walk working on any of them.
+    """
+    m = (rig.matrix_world @ pb.bone.matrix_local).to_3x3()
+    try:
+        v = m.inverted() @ world_axis
+    except ValueError:
+        return Vector((1.0, 0.0, 0.0))
+    return v.normalized() if v.length > 1e-9 else Vector((1.0, 0.0, 0.0))
+
+
+def action_fcurves(act):
+    """Every F-curve in an action, on old and new Blender alike.
+
+    Blender 5 replaced the flat Action.fcurves list with layers, strips and
+    channelbags; 4.x and earlier only have the flat list. The walk keys the
+    same way either way, so this is the only place that has to care.
+    """
+    if act is None:
+        return []
+    flat = getattr(act, "fcurves", None)
+    if flat is not None:
+        return list(flat)
+    out = []
+    for layer in getattr(act, "layers", []):
+        for strip in getattr(layer, "strips", []):
+            for bag in getattr(strip, "channelbags", []):
+                out += list(bag.fcurves)
+    return out
+
+
+def clear_walk(rig):
+    """Drop the walk action and put the rig back in its rest pose."""
+    if rig is None:
+        return False
+    ad = rig.animation_data
+    if ad and ad.action and ad.action.name.startswith(WALK_ACTION):
+        act = ad.action
+        rig.animation_data_clear()
+        if act.users == 0:
+            bpy.data.actions.remove(act)
+    for pb in rig.pose.bones:
+        pb.matrix_basis.identity()
+    return True
+
+
+def walk_cycle(context, av, period=32, stride=0.32, arm_swing=0.26, bob=0.022,
+               arm_down=0.75):
+    """Key a walk-in-place cycle on the avatar's rig.
+
+    Walk in place rather than travelling: the point is to watch the garment
+    move, and a character that walks out of frame has to be chased with the
+    camera. Everything is driven off the body's own side axis, and the action
+    is given a cycle modifier so it loops for as long as you play it.
+    """
+    from . import avatar as _av
+    if av is None:
+        return None, "no avatar"
+    rig = _av.find_armature(av)
+    if rig is None:
+        return None, "the avatar has no armature to animate"
+
+    fwd, side = _av.basis(context.scene.cd.facing)
+    bones = {}
+    for role, keys in WALK_BONES.items():
+        pb = _av._find_bone(rig, keys)
+        if pb is not None:
+            bones[role] = pb
+    if not any(k in bones for k in ("thigh_l", "thigh_r")):
+        return None, "could not find leg bones on %s" % rig.name
+
+    clear_walk(rig)
+    rig.animation_data_create()
+    act = bpy.data.actions.new(WALK_ACTION)
+    rig.animation_data.action = act
+    for pb in rig.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+
+    P = max(8, int(period))
+    step = max(1, P // 16)
+
+    # Sign convention. Turning a hanging limb by a POSITIVE angle about the
+    # body's side axis carries it BACKWARDS - rotate (0,0,-1) about the
+    # character's left and it swings behind. So every amplitude below is
+    # written as the forward swing a reader expects, and the sign is applied
+    # here, once. Getting this backwards makes the whole cycle read as
+    # walking in reverse, which is exactly how it first came out.
+    FWD = -1.0
+
+    def swing(role, amp_fwd, phase, fold=None, drop=0.0):
+        """Key one bone. amp_fwd is a forward swing; fold='back' or 'fwd'
+        makes the joint hinge one way only, as a knee or an elbow does.
+
+        drop brings a limb in towards the body about the forward axis. The
+        avatar stands with its arms held out so garments drape clear of the
+        ribs, and a walk that only swings them fore and aft leaves the
+        character marching with its arms still out sideways.
+        """
+        pb = bones.get(role)
+        if pb is None:
+            return
+        axis = _local_axis(rig, pb, side)
+        q_drop = None
+        if drop:
+            # +drop lowers the character's right arm, -drop the left
+            sgn = -1.0 if role.endswith("_l") else 1.0
+            q_drop = Quaternion(_local_axis(rig, pb, fwd), sgn * drop)
+        for f in range(0, P + 1, step):
+            t = 2.0 * math.pi * f / P + phase
+            a = math.sin(t)
+            if fold == 'back':
+                ang = amp_fwd * max(0.0, a)          # knee: heel toward the seat
+            elif fold == 'fwd':
+                ang = FWD * amp_fwd * max(0.0, a)    # elbow: hand toward the chest
+            else:
+                ang = FWD * amp_fwd * a
+            q = Quaternion(axis, ang)
+            pb.rotation_quaternion = (q @ q_drop) if q_drop else q
+            pb.keyframe_insert("rotation_quaternion", frame=f + 1)
+
+    swing("thigh_l", stride, 0.0)
+    swing("thigh_r", stride, math.pi)
+    # the knee folds through the back half of that leg's stride
+    swing("calf_l", stride * 1.25, math.pi * 1.15, fold='back')
+    swing("calf_r", stride * 1.25, math.pi * 0.15, fold='back')
+    swing("foot_l", stride * 0.30, math.pi * 0.30)
+    swing("foot_r", stride * 0.30, math.pi * 1.30)
+    # arms counter-swing against the same-side leg
+    swing("arm_l", arm_swing, math.pi, drop=arm_down)
+    swing("arm_r", arm_swing, 0.0, drop=arm_down)
+    swing("farm_l", arm_swing * 0.50, math.pi * 0.9, fold='fwd')
+    swing("farm_r", arm_swing * 0.50, math.pi * 1.9, fold='fwd')
+
+    # the torso counter-rotates a little about the vertical
+    spine = bones.get("spine")
+    if spine is not None:
+        up = _local_axis(rig, spine, Vector((0.0, 0.0, 1.0)))
+        for f in range(0, P + 1, step):
+            t = 2.0 * math.pi * f / P
+            spine.rotation_quaternion = Quaternion(up, 0.10 * math.sin(t))
+            spine.keyframe_insert("rotation_quaternion", frame=f + 1)
+
+    # hips bob twice per stride and sway once, which is what makes a walk
+    # read as weight shifting rather than legs waving
+    hips = bones.get("hips")
+    if hips is not None:
+        rest = hips.location.copy()
+        for f in range(0, P + 1, step):
+            t = 2.0 * math.pi * f / P
+            hips.location = rest + Vector((0.0, 0.0, -bob * abs(math.sin(t)))) \
+                + side * (bob * 0.6 * math.sin(t))
+            hips.keyframe_insert("location", frame=f + 1)
+        axis = _local_axis(rig, hips, fwd)
+        for f in range(0, P + 1, step):
+            t = 2.0 * math.pi * f / P
+            hips.rotation_quaternion = Quaternion(axis, 0.06 * math.sin(t))
+            hips.keyframe_insert("rotation_quaternion", frame=f + 1)
+
+    for fc in action_fcurves(act):
+        for kp in fc.keyframe_points:
+            kp.interpolation = 'BEZIER'
+        if not any(mo.type == 'CYCLES' for mo in fc.modifiers):
+            fc.modifiers.new('CYCLES')
+
+    scn = context.scene
+    scn.frame_start = 1
+    scn.frame_end = P
+    scn.frame_set(1)
+    return act, "%d-frame walk on %s" % (P, rig.name)

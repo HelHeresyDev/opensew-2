@@ -8,18 +8,20 @@ Free and open source. No subscription, no login server, no external dependencies
 
 ## What it does
 
-- **Measures your character.** Point it at any rigged body mesh. It takes a stack of cross-sections and the limb axes from the armature, masking the arms and head out by skin weight so a figure with its arms down doesn't measure as having a 112 cm waist.
+- **Measures your character.** Point it at any rigged body mesh. Landmarks are read off the *mesh*, not off bone names: the waist is the narrowest section, the hip the fullest over the seat, the chest the fullest below the shoulder. Rigs disagree about where a "chest" bone belongs — CC4 puts it at 71 % of stature and Mixamo at 76 %, 8 cm apart on the same body — and drafting from that instead is how a block ends up with an armhole down at the waist. Tested across bodies from 145 cm to 217 cm, chest 86 to 117 cm, in `tests/test_bodies.py`. It takes a stack of cross-sections and the limb axes from the armature, masking the arms and head out by skin weight so a figure with its arms down doesn't measure as having a 112 cm waist.
 - **Drafts garments from those measurements.** Nine parametric blocks — T-shirt, tank top, skirt, trousers, jumpsuit, dress, jacket, hoodie, flat panel — drawn the way a pattern cutter would: the neckline is solved to the true neck girth, the armhole to the biceps, and the sleeve cap is solved by bisection so it measures the same as the armhole it's sewn to. A cap longer than its armhole is what gathers a sleeve into a crumpled mess.
 - **Knows men from women.** The figure is read off the measured proportions (or set by hand) and each block follows that figure's drafting rules: scooped vs crew neck, sloped vs square shoulder, side seams that curve in at the waist vs straight, hem cut to the hip, trouser rise at the waist vs below it.
 - **Lets you draw your own.** Click points on the grid in the 2D pattern view, click the first point to close, name the edges, sew them. Every piece has Width and Length, and a garment has a Size that scales all its pieces together. *Counterpart* mirrors a piece to the other side of the body and stitches the edges that meet — draw the front, get the back.
-- **Sews and drapes in three phases.** Stitch (sewing springs pull the seams closed at low gravity), weld (paired seam vertices merge into one continuous surface), settle (full gravity). Welding matters: springs that never stop pulling crush the fabric into wrinkles.
+- **Sews and drapes in four phases.** Stitch (sewing springs pull the seams closed at low gravity), weld (paired seam vertices merge into one continuous surface), settle (full gravity), and for outfits **relax** - a finishing pass that softens the fabric, takes it in a touch so it wraps the body, and lets it rest, because the welded rest shape otherwise holds its ballooned memory forever. Welding matters: springs that never stop pulling crush the fabric into wrinkles.
 - **Grab tool.** Drag on the garment while it simulates and pull the fabric where you want it.
-- **Outfits, layered.** Build a whole outfit at once; each garment sits on its own layer and collides with the body and everything worn under it.
+- **Outfits, layered.** Build a whole outfit at once, in the order you would dress: bottoms first, tops untucked over them, outerwear last. Each garment is arranged over the layers already worn beneath it — not against bare skin — so a jacket goes *on* the shirt instead of through it, and it collides with the body and everything under it.
 - **Finalize.** Freezes the shape, adds thickness, transfers skin weights from the body (smoothed across neighbours, so the crotch of a jumpsuit doesn't tear when the legs separate) and binds to the rig. The garment follows your animation.
 
-![Casual outfit drafted and draped on the male and female avatars](docs/casual_man_woman.png)
+![The Clothing Design workspace in Blender: flat pattern pieces in the 2D view on the left, the avatar wearing a sewn tank top and trousers in the middle, and the Clothing sidebar on the right](docs/workspace.png)
 
-The flat pieces behind that outfit — T-shirt, trousers and jacket — every one drafted from the body in front of it:
+The workspace as it actually looks: pattern pieces on the cutting table at the left, the garment on the body in the middle, and every control on the right — the measurements read off this avatar (161 cm, 87/67/92), the pieces and their sewing springs, the garments stacked in the order they are worn, the seam list, and the simulation.
+
+The flat pieces on their own — T-shirt, trousers and jacket, every one drafted from the body in front of it:
 
 ![Flat pattern pieces](docs/patterns_row.png)
 
@@ -53,7 +55,7 @@ Then try **Outfit** for a full layered set, or **Draw Pattern** to start from yo
 | Trousers | hip yoke front/back, four leg panels | the yoke is what keeps them up |
 | Jumpsuit | bodice with a split hem, sleeves, four legs | one piece shoulder to ankle |
 | Dress | front, back (optional sleeves) | A-line shift |
-| Jacket | two front halves, back, long sleeves | open front |
+| Jacket | two front halves, back, long sleeves | buttoned below an open lapel V |
 | Hoodie | front, back, sleeves, two-piece hood | hood cut to the neckline it joins |
 | Flat Panel | one rectangle | for drawing your own |
 
@@ -72,23 +74,34 @@ Four presets — Crisp/Tailored, Soft/Jersey, Stiff/Denim, Light/Silk — set te
 
 ## Avatars
 
-Two stripped fitting bodies are bundled — Camila and Kevin, 1.4 MB each: no textures, no facial morphs, arms held 60° out, feet on the floor. Garments drape noticeably cleaner with the arms away from the torso. Use your own character with **Set Avatar**; any rigged mesh with a recognisable spine/arm/leg bone naming (CC4, Mixamo, Rigify) measures automatically.
+Two fitting bodies are bundled — Nora and Theo, about 0.8 MB each: no textures, no facial morphs, arms held 60° out, feet on the floor. Both are generated with [MPFB2](https://static.makehumancommunity.org/mpfb.html) from the MakeHuman community's CC0 base mesh and targets (`tools/make_default_avatars.py` rebuilds them), carry Mixamo-named rigs with skin weights, and are themselves **public domain (CC0)** — you can ship, modify and reuse them without attribution. Garments drape noticeably cleaner with the arms away from the torso. Use your own character with **Set Avatar**; any rigged mesh with a recognisable spine/arm/leg bone naming (CC4, Mixamo, Rigify) measures automatically.
 
 ## Known issues
 
 Honest list — it's a 1.0.
 
-- **Tops ride up during the stitch phase.** With the default unlimited sewing force, a hip-length top settles 10–17 cm higher than it was cut, which leaves a gap above the trousers in the outfit render above. The cause is measured (the uncapped springs, and sleeves on a raised arm hoisting the bodice); the fix is in progress. Capping *Sew Force* around 2–5 helps sleeveless garments today.
+- **Tops ride up a few centimetres during the stitch phase.** Unlimited sewing springs hoist a hip-length top up the body while they close. Capping *Sew Force* around 2–5 measurably lowers a light top's hem, but a heavy garment (the dress) then fails to seat its shoulders, so the default stays unlimited. *Take In* after the weld tightens the drape.
 - Layering is one-way: an outer garment sees the inner ones, inner garments don't react to outer ones.
 - No darts, pleats or seam allowance yet in the drawn patterns.
 - It is Blender's cloth solver: a full outfit takes a couple of minutes to sew, and results are as good as Blender cloth gets.
 - Tested on Blender 5.2 only.
 
+## Regenerating the assets
+
+```bash
+blender -b --python tools/make_default_avatars.py            # rebuild both bundled avatars (needs MPFB)
+blender -b --python tools/render_readme_images.py            # outfit stills, if you want rendered ones
+```
+
 ## Testing
 
 ```bash
+blender -b --python tools/make_test_bodies.py         # once: six varied bodies (needs MPFB)
+blender -b --python tests/test_bodies.py              # drafts and sews on all of them (~20 min)
 blender -b --python tests/test_presets.py            # both avatars, every preset, seam lengths  (~1 min)
 blender -b --python tests/test_presets.py -- --drape  # + sews a T-shirt and trousers on each     (~3 min)
+blender -b --python tests/test_fit.py                 # drapes every preset on both avatars and checks
+                                                      # hems, sleeve reach and floor clearance (~15 min)
 ```
 
 ## Contributing
@@ -97,4 +110,6 @@ Issues and pull requests welcome. If a garment drafts badly on your character, t
 
 ## License
 
-GPL-3.0-or-later, like Blender itself.
+GPL-3.0-or-later, like Blender itself. The two bundled avatars are separate
+works dedicated to the public domain (CC0 1.0) — generated with MPFB2 from the
+MakeHuman community's CC0 data; see `clothing_design/assets/README.md`.
