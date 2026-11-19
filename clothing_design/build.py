@@ -5,8 +5,9 @@
 # treats loose edges as sewing springs, so the panels stitch themselves together
 # during simulation the way real pattern pieces are sewn together.
 import bpy, bmesh, math, bisect
+from collections.abc import Mapping
 from mathutils import Vector
-from . import avatar, patterns
+from . import avatar, patterns, props
 
 GARMENT_PREFIX = "CD_Garment_"
 
@@ -257,6 +258,115 @@ def activate_garment(context, garment):
         raise ValueError("Select an arranged garment in the current scene")
     context.scene.cd.active_garment = bpy.data.objects.find(ob.name)
     return ob
+
+
+def _pattern_data(spec):
+    if not isinstance(spec, Mapping) or not isinstance(spec.get("name"), str) or not spec["name"].strip():
+        raise ValueError("Pattern specification needs a non-empty garment name")
+    pieces = spec.get("pieces", [])
+    seams = spec.get("seams", [])
+    if not isinstance(pieces, (list, tuple)) or not pieces:
+        raise ValueError("Provide at least one pattern piece")
+    if not isinstance(seams, (list, tuple)):
+        raise ValueError("Seams must be an array")
+    anchors = {entry[0] for entry in props.ANCHORS}
+    prepared = {}
+    for piece in pieces:
+        if not isinstance(piece, Mapping):
+            raise ValueError("Each piece must be an object")
+        name = piece.get("name")
+        if not isinstance(name, str) or not name.strip() or name in prepared:
+            raise ValueError("Each piece needs a unique non-empty name")
+        anchor = piece.get("anchor", "TORSO_FRONT")
+        if not isinstance(anchor, str) or anchor not in anchors:
+            raise ValueError(f"Unknown anchor on {name}: {anchor!r}")
+        segments = {}
+        edges = piece.get("segs")
+        if not isinstance(edges, (list, tuple)):
+            raise ValueError(f"Provide an ordered edge array for {name}")
+        for label, points in edges:
+            if not isinstance(label, str) or not label.strip() or label in segments:
+                raise ValueError(f"Each edge on {name} needs a unique non-empty name")
+            coords = [Vector(point) for point in points]
+            if len(coords) < 2 or any(len(point) != 2 or not all(map(math.isfinite, point))
+                                      for point in coords):
+                raise ValueError(f"{name}.{label} needs finite 2D points")
+            segments[label] = coords
+        outline = list(segments.values())
+        if len(outline) < 2 or any((points[-1] - outline[(i + 1) % len(outline)][0]).length > 1e-6
+                                   for i, points in enumerate(outline)):
+            raise ValueError(f"Edges on {name} must form a closed outline in order")
+        prepared[name] = (piece, segments)
+
+    for seam in seams:
+        if not isinstance(seam, (list, tuple)) or len(seam) not in (4, 5):
+            raise ValueError("Each seam needs two piece/edge pairs and optional flip")
+        a, edge_a, b, edge_b = seam[:4]
+        if (not all(isinstance(key, str) for key in seam[:4])
+                or edge_a not in prepared.get(a, ({}, {}))[1]
+                or edge_b not in prepared.get(b, ({}, {}))[1]):
+            raise ValueError(f"Seam references an unknown piece or edge: {seam!r}")
+        if len(seam) == 5 and type(seam[4]) is not bool:
+            raise ValueError("Seam flip must be true or false when supplied")
+    if type(spec.get("shoulder_pins", True)) is not bool:
+        raise ValueError("shoulder_pins must be true or false")
+    return prepared, seams
+
+
+def draft_garment(context, spec, *, report=None):
+    """Create a garment from a JSON-compatible pattern specification in metres."""
+    from . import sim
+
+    scn = context.scene
+    if scn.cd.avatar is None:
+        raise ValueError("Set an avatar before drafting")
+    pieces, seams = _pattern_data(spec)
+    base = spec["name"]
+    name = base
+    i = 1
+    while garment_pieces(context, name) or garment_object(context, name, create=False):
+        i += 1
+        name = f"{base}{i}"
+
+    existing = sim.garment_layers(context)
+    seam_start = len(scn.cd.seams)
+    made = {}
+    garment = None
+    try:
+        with props.muted():
+            for label, (piece, segments) in pieces.items():
+                made[label] = patterns.create_panel(
+                    context, f"{name}_{label}", list(segments.items()), garment=name,
+                    anchor=piece.get("anchor", "TORSO_FRONT"), height=piece.get("height", 0.5),
+                    ease=piece.get("ease", 0.02), wrap=piece.get("wrap", 1.0),
+                    spin=piece.get("spin", 0.0), taper=piece.get("taper", 0.0))
+            for entry in seams:
+                a, edge_a, b, edge_b = entry[:4]
+                seam = scn.cd.seams.add()
+                seam.name = f"{a}.{edge_a} - {b}.{edge_b}"
+                seam.obj_a, seam.seg_a = made[a], edge_a
+                seam.obj_b, seam.seg_b = made[b], edge_b
+                if len(entry) == 5:
+                    seam.flip = entry[4]
+                    seam.auto_flip = False
+
+        garment = garment_object(context, name)
+        garment.cd.layer = max((ob.cd.layer for ob in existing), default=-1) + 1
+        garment.cd.shoulder_pins = spec.get("shoulder_pins", True)
+        sync_garment(context, report, name)
+        sim.setup_cloth(context, garment)
+        sim.ensure_collider(context, scn.cd.avatar)
+        sim.setup_layers(context)
+        return activate_garment(context, garment)
+    except Exception:
+        for index in range(len(scn.cd.seams) - 1, seam_start - 1, -1):
+            scn.cd.seams.remove(index)
+        for ob in list(made.values()) + ([garment] if garment is not None else []):
+            mesh = ob.data
+            bpy.data.objects.remove(ob, do_unlink=True)
+            if mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
+        raise
 
 
 def _chain_bmverts(ob, seg, vmap):

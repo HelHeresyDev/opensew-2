@@ -562,6 +562,17 @@ def close_seams(context, ob):
     return merged, skipped
 
 
+def _world_surface(context, ob):
+    evaluated = ob.evaluated_get(context.evaluated_depsgraph_get())
+    mesh = evaluated.data
+    mesh.calc_loop_triangles()
+    coords = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
+    faces = [tuple(tri.vertices) for tri in mesh.loop_triangles]
+    if not faces:
+        raise ValueError("Arrange the garment before checking its fit")
+    return coords, faces
+
+
 def body_fit(context, ob, tolerance=0.004):
     """Measure vertex penetration and intersecting faces on the displayed garment."""
     from . import avatar
@@ -570,13 +581,7 @@ def body_fit(context, ob, tolerance=0.004):
     body = avatar.body_bvh(context, refresh=True)
     if body is None:
         raise ValueError("Set an avatar before checking garment fit")
-    evaluated = ob.evaluated_get(context.evaluated_depsgraph_get())
-    mesh = evaluated.data
-    mesh.calc_loop_triangles()
-    coords = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
-    faces = [tuple(tri.vertices) for tri in mesh.loop_triangles]
-    if not faces:
-        raise ValueError("Arrange the garment before checking its fit")
+    coords, faces = _world_surface(context, ob)
 
     inside = 0
     deepest = 0.0
@@ -589,6 +594,46 @@ def body_fit(context, ob, tolerance=0.004):
     intersecting = {face for face, _ in surface.overlap(body)}
     return {"vertices": len(coords), "vertices_inside": inside,
             "intersecting_triangles": len(intersecting), "max_depth_m": deepest}
+
+
+def layer_fit(context, ob):
+    """Count garment triangles intersecting each layer underneath it."""
+    from mathutils.bvhtree import BVHTree
+
+    coords, faces = _world_surface(context, ob)
+    surface = BVHTree.FromPolygons(coords, faces, all_triangles=True)
+    result = {}
+    for inner in garment_layers(context):
+        if inner.cd.layer >= ob.cd.layer:
+            continue
+        inner_coords, inner_faces = _world_surface(context, inner)
+        tree = BVHTree.FromPolygons(inner_coords, inner_faces, all_triangles=True)
+        result[inner.cd.garment] = len({face for face, _ in surface.overlap(tree)})
+    return result
+
+
+def pose_fit(context, ob, frames, *, tolerance=0.004):
+    """Measure body intersections for a skinned garment at the supplied animation frames."""
+    if not any(mod.type == 'ARMATURE' and mod.object and mod.show_viewport
+               for mod in ob.modifiers):
+        raise ValueError("Bind the garment to an armature before checking poses")
+    if any(mod.type == 'CLOTH' and mod.show_viewport for mod in ob.modifiers):
+        raise ValueError("Finalize the cloth before sampling animation frames")
+    frames = list(frames)
+    if not frames or any(type(frame) is not int for frame in frames):
+        raise ValueError("Supply at least one integer animation frame")
+
+    scene = context.scene
+    original_frame = scene.frame_current
+    original_subframe = scene.frame_subframe
+    result = []
+    try:
+        for frame in frames:
+            scene.frame_set(frame)
+            result.append({"frame": frame, **body_fit(context, ob, tolerance=tolerance)})
+    finally:
+        scene.frame_set(original_frame, subframe=original_subframe)
+    return result
 
 
 def set_gravity(ob, factor):

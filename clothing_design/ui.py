@@ -238,6 +238,9 @@ class CD_PT_sim(_Base, Panel):
         col = L.column(align=True)
         col.prop(scn.cd, "stitch_frames")
         col.prop(scn.cd, "settle_frames")
+        garment = build.garment_object(context, create=False)
+        if garment is not None:
+            col.prop(garment.cd, "shoulder_pins")
         col.prop(scn.cd, "stitch_gravity", slider=True)
         col.prop(scn.cd, "auto_close")
         row = L.row(align=True)

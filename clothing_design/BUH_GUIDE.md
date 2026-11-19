@@ -45,6 +45,8 @@ if status["state"] == "finished":
 
 `body_fit` checks the evaluated garment mesh at the current frame against the avatar. It reports vertices more than 4 mm inside the body by default, the maximum estimated depth in metres, and the number of garment triangles that intersect the body. Inspect the neckline, shoulders, sleeves, and seams in the viewport before finalizing. For layered or animated clothing, also check the other layers and representative poses.
 
+To watch a Relax pass in graphical Blender, activate the garment and invoke `bpy.ops.cd.relax('INVOKE_DEFAULT')` with the same viewport override. Poll `ops.simulation_status()` in later requests. Blender can handle viewport input between frames during this modal pass.
+
 ### Headless Blender MCP
 
 Start a fresh Blender scene for an experiment. If you need to load an empty startup scene through MCP, save your current work first and use `bpy.ops.wm.read_homefile(use_empty=True, use_factory_startup=True)`. The Blender MCP extension blocks `read_factory_settings` because it resets preferences.
@@ -107,6 +109,44 @@ Use `build.activate_garment(bpy.context, garment)` before an operation that acts
 
 `bpy.ops.cd.add_garment` drafts presets. The lower-level signature for a custom piece is `patterns.create_panel(context, name, segs, ..., garment=..., anchor=..., height=..., ease=...)`. Each segment is a name and its 2D points. Call `avatar.measure(bpy.context)` to measure the body's mesh.
 
+### Draft from a structured specification
+
+`build.draft_garment(bpy.context, spec)` accepts a Python dictionary or parsed JSON. It returns the arranged garment object and sets it active. The same drafting path builds the preset garments.
+
+- `name` is the garment name. OpenSew adds a suffix when that name is in use.
+- `pieces` lists named pieces. Each piece has an ordered `segs` array of `[edge_name, [[x, y], ...]]` pairs in metres. Ordered edges must share endpoints and close the outline. The optional `anchor`, `height`, `ease`, `wrap`, `spin`, and `taper` values use the existing Arrangement settings. `ease` sets the starting clearance for each piece independently.
+- `seams` lists `[piece_a, edge_a, piece_b, edge_b]` pairs with an optional boolean fifth entry for flip direction.
+- Optional `shoulder_pins: false` disables the stitch-phase collar pins for that garment. This is also available as **Layered Shoulder Pins** in the Simulate panel.
+
+```python
+import bpy
+from clothing_design import build
+
+edges = [
+    ["bottom", [[-0.25, -0.055], [0.25, -0.055]]],
+    ["right", [[0.25, -0.055], [0.25, 0.055]]],
+    ["top", [[0.25, 0.055], [-0.25, 0.055]]],
+    ["left", [[-0.25, 0.055], [-0.25, -0.055]]],
+]
+garment = build.draft_garment(bpy.context, {
+    "name": "Waist fitting sample",
+    "pieces": [
+        {"name": "Front", "anchor": "TORSO_FRONT", "height": 0.63, "segs": edges},
+        {"name": "Back", "anchor": "TORSO_BACK", "height": 0.63, "segs": edges},
+    ],
+    "seams": [
+        ["Front", "left", "Back", "left", False],
+        ["Front", "right", "Back", "right", False],
+    ],
+})
+```
+
+### Check layered fit and animation
+
+Use `sim.body_fit(context, garment)` for intersections with the avatar and `sim.layer_fit(context, garment)` for intersections with each inner layer. Check weld counts and inspect the sleeve and collar shape as separate fit checks. An outer garment can clear the body while passing through another garment.
+
+After finalizing the skinned outfit, call `sim.pose_fit(bpy.context, garment, [1, 28, 62])` with the relevant animation frames. It reports body intersections at each specified frame and restores the original timeline position. Include a fitting pose, an overhead reach, a wide stance, and a high kick from the target rig's animation set when available.
+
 ### Layered sewing performance
 
 OpenSew pauses cloth and collision modifiers on outer garments while sewing underneath them. Inner garments still act as colliders. For a layered outfit, sew and finalize the inner garments first so later solves can use them as fitted colliders. The outer layers resume their previous modifier settings when the sew finishes or is cancelled.
@@ -124,6 +164,7 @@ Use `bpy.ops.cd.add_garment(preset='SASH', fit=0.08, name="Sash")` for two waist
 Run from the fork root with the add-on available to Blender. The targeted fit and UI tests import the checkout directly.
 
 ```sh
+blender -b --factory-startup --python-exit-code 1 --python tests/test_pattern_spec.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped --outer-layer --relax
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --preset SASH
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --figure WOMAN --operation drape

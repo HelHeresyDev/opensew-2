@@ -215,60 +215,24 @@ class CD_OT_add_garment(Operator):
 
         label, fn = library.PRESETS[self.preset]
         gname = self.name or label.replace(" ", "")
-        base = gname
-        i = 1
-        while any(o.cd.is_pattern and o.cd.garment == gname for o in scn.objects):
-            i += 1
-            gname = "%s%d" % (base, i)
-        scn.cd.garment_name = gname
-
         m = dict(m)
         m["figure"] = avatar.figure(context, m)
         try:
             pieces, seams = fn(m, fit=self.fit)
-        except Exception as e:
-            self.report({'ERROR'}, "Preset failed: %s" % e)
+            if self.arrangement_ease >= 0:
+                pieces = [dict(spec, ease=self.arrangement_ease) for spec in pieces]
+            build.draft_garment(context, {"name": gname, "pieces": pieces, "seams": seams},
+                                report=self.report)
+        except (ValueError, TypeError, RuntimeError) as error:
+            self.report({'ERROR'}, f"Could not draft {label}: {error}")
             return {'CANCELLED'}
 
-        made = {}
-        with props.muted():
-          for spec in pieces:
-            ob = patterns.create_panel(
-                context, "%s_%s" % (gname, spec["name"]), spec["segs"],
-                garment=gname, anchor=spec["anchor"], height=spec["height"],
-                ease=(self.arrangement_ease if self.arrangement_ease >= 0
-                      else spec.get("ease", 0.02)), wrap=spec.get("wrap", 1.0),
-                spin=spec.get("spin", 0.0), taper=spec.get("taper", 0.0))
-            made[spec["name"]] = ob
-
-        drop_seams_for(scn, gname)
-        for entry in seams:
-            a, sa, b, sb = entry[:4]
-            flip = entry[4] if len(entry) > 4 else None
-            if a not in made or b not in made:
-                continue
-            s = scn.cd.seams.add()
-            s.name = "%s.%s - %s.%s" % (a, sa, b, sb)
-            s.obj_a, s.seg_a, s.obj_b, s.seg_b = made[a], sa, made[b], sb
-            if flip is not None:
-                s.flip = flip
-                s.auto_flip = False
-
-        if made:
-            existing = sim.garment_layers(context)
-            g = build.garment_object(context, gname)
-            g.cd.layer = max((o.cd.layer for o in existing), default=-1) + 1
-            build.sync_garment(context, self.report, gname)
-            sim.setup_cloth(context, g)
-            sim.ensure_collider(context, scn.cd.avatar)
-            sim.setup_layers(context)
-            build.activate_garment(context, g)
         try:
             workspace.refresh_views(context)
         except Exception:
             pass
         self.report({'INFO'}, "%s (%s): %d pieces, %d seams"
-                    % (label, m["figure"].lower(), len(made), len(seams)))
+                    % (label, m["figure"].lower(), len(pieces), len(seams)))
         return {'FINISHED'}
 
 
@@ -1239,7 +1203,7 @@ def sew_steps(context, targets):
                     for inner in others
                     for piece in build.garment_pieces(context, inner.cd.garment)
                 )
-                pinned = layered_top and sim.pin_shoulders(context, garment)
+                pinned = garment.cd.shoulder_pins and layered_top and sim.pin_shoulders(context, garment)
                 sim.set_gravity(garment, scn.cd.stitch_gravity)
                 try:
                     yield "Stitching", name, 0, scn.cd.stitch_frames

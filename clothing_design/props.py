@@ -170,6 +170,8 @@ class CDObject(PropertyGroup):
                             description="Layering order. A garment collides with the body and "
                                         "with every garment on a lower layer, so 0 is worn "
                                         "innermost")
+    shoulder_pins: BoolProperty(name="Layered Shoulder Pins", default=True,
+                                description="Hold a sleeved garment at the collar while stitching over another top")
     garment:    StringProperty(default="Garment")
     anchor:     EnumProperty(items=ANCHORS, default='TORSO_FRONT', update=_resync)
     height:     FloatProperty(name="Height", default=0.5, min=-0.5, max=1.5,
