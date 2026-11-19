@@ -1,5 +1,5 @@
 # Clothing Design - operators.
-import bpy, bmesh, math, json, os, traceback
+import bpy, bmesh, math, json, os, time, traceback
 from bpy.app.handlers import persistent
 from bpy.props import (StringProperty, BoolProperty, FloatProperty, IntProperty,
                        EnumProperty, FloatVectorProperty)
@@ -197,6 +197,9 @@ class CD_OT_add_garment(Operator):
     fit: FloatProperty(name="Ease", default=0.08, min=-0.1, max=1.0,
                        description="Extra width over the body measurement. Lower is a closer fit")
     name: StringProperty(name="Name", default="")
+    arrangement_ease: FloatProperty(name="Arrangement Clearance", default=-1.0,
+                                    min=-1.0, max=0.5, unit='LENGTH',
+                                    description="Starting distance from the body. Use -1 for the preset values")
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=280)
@@ -233,7 +236,8 @@ class CD_OT_add_garment(Operator):
             ob = patterns.create_panel(
                 context, "%s_%s" % (gname, spec["name"]), spec["segs"],
                 garment=gname, anchor=spec["anchor"], height=spec["height"],
-                ease=spec.get("ease", 0.02), wrap=spec.get("wrap", 1.0),
+                ease=(self.arrangement_ease if self.arrangement_ease >= 0
+                      else spec.get("ease", 0.02)), wrap=spec.get("wrap", 1.0),
                 spin=spec.get("spin", 0.0), taper=spec.get("taper", 0.0))
             made[spec["name"]] = ob
 
@@ -250,18 +254,15 @@ class CD_OT_add_garment(Operator):
                 s.flip = flip
                 s.auto_flip = False
 
-        g = build.sync_garment(context, self.report, gname)
-        if g:
-            existing = [o for o in scn.objects
-                        if o.cd.is_garment and o is not g and o.data and len(o.data.vertices)]
+        if made:
+            existing = sim.garment_layers(context)
+            g = build.garment_object(context, gname)
             g.cd.layer = max((o.cd.layer for o in existing), default=-1) + 1
+            build.sync_garment(context, self.report, gname)
             sim.setup_cloth(context, g)
             sim.ensure_collider(context, scn.cd.avatar)
             sim.setup_layers(context)
-            for i, o in enumerate(bpy.data.objects):
-                if o is g:
-                    scn.cd.active_garment = i
-                    break
+            build.activate_garment(context, g)
         try:
             workspace.refresh_views(context)
         except Exception:
@@ -296,11 +297,12 @@ def _record_progress(scene, progress):
                               stage_frames=total, frame=scene.frame_current)
 
 
-class _SewJob:
-    def __init__(self, context, garment):
+class _SteppedJob:
+    def __init__(self, context, operation, steps):
         self.scene = context.scene
         self.view_layer = context.view_layer
-        self.steps = sew_steps(context, [garment])
+        self.operation = operation
+        self.steps = steps
 
     def finish(self, state, message):
         global _active_simulation
@@ -311,32 +313,55 @@ class _SewJob:
             _simulation_status.update(state=state, message=message, frame=self.scene.frame_current)
 
 
-def start_sew(context, garment_name=None):
-    """Queue one garment for explicit frame stepping and return its status."""
-    global _active_simulation, _simulation_status
+def _job_garment(context, garment_name):
     if _active_simulation is not None:
         raise RuntimeError("A clothing simulation is already running")
-    if getattr(getattr(context, "screen", None), "is_animation_playing", False):
+    screen = getattr(context, "screen", None)
+    if screen is not None and screen.is_animation_playing:
         raise RuntimeError("Stop playback before starting a clothing simulation")
     name = context.scene.cd.garment_name if garment_name is None else garment_name
     garment = next((ob for ob in sim.garment_layers(context) if ob.cd.garment == name), None)
     if garment is None:
         raise ValueError(f"No arranged garment named {name!r} in the current scene")
-    _active_simulation = _SewJob(context, garment)
-    _simulation_status = {"state": "running", "operation": "cd.sew", "phase": "Queued",
-                          "garment": name, "frame": context.scene.frame_current}
+    return garment
+
+
+def _queue_job(context, garment, operation, steps):
+    global _active_simulation, _simulation_status
+    _active_simulation = _SteppedJob(context, operation, steps)
+    _simulation_status = {"state": "running", "operation": operation, "phase": "Queued",
+                          "garment": garment.cd.garment, "frame": context.scene.frame_current}
     return simulation_status()
 
 
-def step_sew(context, frames_per_call=1):
-    """Advance a queued sew job by at most this many frames or phase transitions."""
+def start_sew(context, garment_name=None):
+    """Queue one garment for explicit frame stepping and return its status."""
+    garment = _job_garment(context, garment_name)
+    return _queue_job(context, garment, "cd.sew", sew_steps(context, [garment]))
+
+
+def start_relax(context, garment_name=None, *, take_in=0.06, frames=60, relax_frames=90):
+    """Queue a sewn garment for a resumable Relax pass."""
+    garment = _job_garment(context, garment_name)
+    if build.loose_edges(garment.data):
+        raise ValueError("Sew and weld the garment before relaxing it")
+    if not 0.0 <= take_in <= 0.3:
+        raise ValueError("take_in must be between 0 and 0.3")
+    if any(type(count) is not int or count < 0 for count in (frames, relax_frames)):
+        raise ValueError("frames and relax_frames must be non-negative integers")
+    steps = _relax_steps(context, garment, take_in, frames, relax_frames)
+    return _queue_job(context, garment, "cd.relax", steps)
+
+
+def _step_job(context, operation, frames_per_call, time_budget_s=None):
     if type(frames_per_call) is not int or frames_per_call < 1:
         raise ValueError("frames_per_call must be a positive integer")
     job = _active_simulation
-    if not isinstance(job, _SewJob):
+    if not isinstance(job, _SteppedJob) or job.operation != operation:
         return simulation_status()
     if context.scene != job.scene or context.view_layer != job.view_layer:
         raise RuntimeError("Return to the original scene and view layer before stepping")
+    deadline = None if time_budget_s is None else time.monotonic() + time_budget_s
     for _ in range(frames_per_call):
         try:
             progress = next(job.steps)
@@ -347,19 +372,43 @@ def step_sew(context, frames_per_call=1):
             job.finish("failed", str(error))
             raise
         _record_progress(job.scene, progress)
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+    return simulation_status()
+
+
+def step_sew(context, frames_per_call=1):
+    """Advance a queued sew job by at most this many frames or phase transitions."""
+    return _step_job(context, "cd.sew", frames_per_call)
+
+
+def step_relax(context, frames_per_call=10, *, time_budget_s=5.0):
+    """Advance Relax, checking its wall-clock budget after each frame or phase."""
+    if not math.isfinite(time_budget_s) or time_budget_s <= 0:
+        raise ValueError("time_budget_s must be a finite positive duration")
+    return _step_job(context, "cd.relax", frames_per_call, time_budget_s)
+
+
+def _cancel_job(operation=None):
+    job = _active_simulation
+    if isinstance(job, _SteppedJob) and (operation is None or job.operation == operation):
+        job.finish("cancelled", "Simulation stopped at the current frame")
     return simulation_status()
 
 
 def cancel_sew():
     """Stop a queued sew job at the current frame and release the job."""
-    if isinstance(_active_simulation, _SewJob):
-        _active_simulation.finish("cancelled", "Simulation stopped at the current frame")
-    return simulation_status()
+    return _cancel_job("cd.sew")
+
+
+def cancel_relax():
+    """Stop a queued Relax pass at the current frame and release the job."""
+    return _cancel_job("cd.relax")
 
 
 @persistent
-def _cancel_sew_before_load(_):
-    cancel_sew()
+def _cancel_job_before_load(_):
+    _cancel_job()
 
 
 class SimulationOperator:
@@ -1338,6 +1387,14 @@ class CD_OT_settle(SimulationOperator, Operator):
         return f"Settled to frame {scn.frame_current}"
 
 
+def _relax_steps(context, garment, take_in, frames=60, relax_frames=90):
+    relaxed = yield from sim.relax_garment_steps(context, garment, take_in=take_in,
+                                                 frames=frames, relax_frames=relax_frames)
+    if not relaxed:
+        raise ValueError("The garment has no cloth - sew it first")
+    return f"Relaxed {garment.cd.garment} to frame {context.scene.frame_current}"
+
+
 class CD_OT_relax(SimulationOperator, Operator):
     bl_idname = "cd.relax"
     bl_label = "Relax"
@@ -1354,10 +1411,7 @@ class CD_OT_relax(SimulationOperator, Operator):
         ob = build.garment_object(context, create=False)
         if ob is None:
             raise ValueError("No garment")
-        relaxed = yield from sim.relax_garment_steps(context, ob, take_in=self.take_in)
-        if not relaxed:
-            raise ValueError("The garment has no cloth - sew it first")
-        return f"Relaxed {ob.cd.garment} to frame {context.scene.frame_current}"
+        return _relax_steps(context, ob, self.take_in)
 
 
 class CD_OT_reset_sim(Operator):
@@ -1553,11 +1607,11 @@ CLASSES = (
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
-    bpy.app.handlers.load_pre.append(_cancel_sew_before_load)
+    bpy.app.handlers.load_pre.append(_cancel_job_before_load)
 
 
 def unregister():
-    cancel_sew()
-    bpy.app.handlers.load_pre.remove(_cancel_sew_before_load)
+    _cancel_job()
+    bpy.app.handlers.load_pre.remove(_cancel_job_before_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

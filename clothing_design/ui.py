@@ -122,6 +122,7 @@ class CD_PT_patterns(_Base, Panel):
         col = L.column(align=True)
         col.prop(scn.cd, "resolution")
         col.prop(scn.cd, "pattern_gap")
+        col.prop(scn.cd, "show_patterns")
         row = L.row(align=True)
         row.prop(scn.cd, "subdiv_levels")
         row.prop(scn.cd, "subdiv_render", text="Render")

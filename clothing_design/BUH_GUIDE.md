@@ -79,6 +79,34 @@ result = ops.step_sew(bpy.context, frames_per_call=1)
 
 Use `ops.simulation_status()` to read progress after an interrupted request and `ops.cancel_sew()` to stop and keep the current state. Once the job completes and you have checked the fit and weld counts, set `bpy.context.scene.cd.garment_name` to the same name before calling `bpy.ops.cd.finalize()`. The existing `bpy.ops.cd.sew()` and `bpy.ops.cd.drape()` calls still run synchronously for standalone Blender scripts.
 
+### Resume Relax between requests
+
+Queue Relax once on a sewn garment. Set `take_in` to choose how much the cloth should tighten.
+
+```python
+import bpy
+from clothing_design import ops
+
+result = ops.start_relax(bpy.context, "Inner shirt", take_in=0.03)
+```
+
+Send the next block as a separate request and repeat until `state` is `finished`. Relax checks the five-second default budget after every frame or phase transition. A single slow frame or freeze can run past the budget. Check `ops.simulation_status()` after a client timeout and use `ops.cancel_relax()` to stop the job at its current frame.
+
+```python
+import bpy
+from clothing_design import ops
+
+result = ops.step_relax(bpy.context, frames_per_call=50, time_budget_s=5.0)
+```
+
+### Pattern visibility and garment selection
+
+Turn off **Clothing → Patterns → Show 2D Patterns** or set `bpy.context.scene.cd.show_patterns = False` while watching the drape. Turn it back on to edit the flat pieces. The setting hides the pattern collection in the scene's view layers and leaves the arranged garment visible.
+
+Use `build.activate_garment(bpy.context, garment)` before an operation that acts on the active garment. The argument accepts the garment's OpenSew name or its mesh object. Blender's `bpy.data.objects.find` takes an object name string. [Blender collection API](https://docs.blender.org/api/current/bpy.types.bpy_prop_collection.html)
+
+`bpy.ops.cd.add_garment` drafts presets. The lower-level signature for a custom piece is `patterns.create_panel(context, name, segs, ..., garment=..., anchor=..., height=..., ease=...)`. Each segment is a name and its 2D points. Call `avatar.measure(bpy.context)` to measure the body's mesh.
+
 ### Layered sewing performance
 
 OpenSew pauses cloth and collision modifiers on outer garments while sewing underneath them. Inner garments still act as colliders. For a layered outfit, sew and finalize the inner garments first so later solves can use them as fitted colliders. The outer layers resume their previous modifier settings when the sew finishes or is cancelled.
@@ -87,14 +115,17 @@ On the project machine with Blender 5.3, a four-garment scene took 62.9 seconds 
 
 ### Cultivator outfit experiment
 
-The verified stock T-shirt and jacket use their default sleeve lengths. The longer 92 cm T-shirt sleeves and the open, knee-length jacket are separate fitting cases from the report. A crossed collar needs overlapping front pattern pieces. A sash needs a closed waist construction or an attachment to the garment underneath before gravity is enabled.
+Use `bpy.ops.cd.add_garment(preset='SASH', fit=0.08, name="Sash")` for two waist-shaped panels with side seams. Sew the sash after the layers it rests on. The preset closed and sat at the waist during the fitting test on Theo and Nora, and over Theo's sewn T-shirt.
+
+`bpy.ops.cd.add_garment(preset='TSHIRT', fit=0.10, arrangement_ease=0.05)` sets a 5 cm starting clearance while retaining the cut specified by `fit`. The default T-shirt at `fit=0.10` cleared the body on Theo in a fresh test and over sewn trousers. Inspect the results of the actual outfit after each solve. The long-sleeve robe experiments and a crossed-collar pattern still require fitting and visual validation.
 
 ## Verification
 
 Run from the fork root with the add-on available to Blender. The targeted fit and UI tests import the checkout directly.
 
 ```sh
-blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped --outer-layer
+blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped --outer-layer --relax
+blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --preset SASH
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --figure WOMAN --operation drape
 blender --factory-startup --enable-event-simulate --python-exit-code 1 --python tests/test_simulation_ui.py
 ```

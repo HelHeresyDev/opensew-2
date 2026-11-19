@@ -208,6 +208,12 @@ class CDObject(PropertyGroup):
     seg_order:  StringProperty(default="")   # comma separated segment names, creation order
 
 
+def _show_patterns(self, context):
+    from . import patterns
+
+    patterns.apply_pattern_visibility(self.id_data)
+
+
 class CDScene(PropertyGroup):
     avatar: PointerProperty(
         type=bpy.types.Object, name="Avatar",
@@ -229,6 +235,9 @@ class CDScene(PropertyGroup):
     keep_off_body: BoolProperty(name="Keep Off Body", default=True,
                                 description="Push arranged panels out of the body before "
                                             "simulating, so nothing starts inside the mesh")
+    show_patterns: BoolProperty(name="Show 2D Patterns", default=True,
+                                description="Show the flat pattern pieces in the viewport",
+                                update=_show_patterns)
     live_sync: BoolProperty(name="Live Sync", default=True,
                             description="Rebuild the 3D garment whenever an arrangement value changes")
 

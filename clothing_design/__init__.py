@@ -5,7 +5,7 @@
 bl_info = {
     "name": "Clothing Design (Beneath Uncounted Heavens)",
     "author": "Marcello Morettoni",
-    "version": (1, 0, 3),
+    "version": (1, 0, 4),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Clothing  |  Workspace: Clothing Design",
     "description": "Draw 2D patterns, sew them into a garment and simulate it onto your character",

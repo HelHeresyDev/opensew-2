@@ -28,6 +28,14 @@ def get_collection(context, name):
     return coll
 
 
+def apply_pattern_visibility(scene):
+    """Apply the scene's pattern visibility without excluding drafting data."""
+    for view_layer in scene.view_layers:
+        layer = view_layer.layer_collection.children.get(PATTERN_COLL)
+        if layer is not None:
+            layer.hide_viewport = not scene.cd.show_patterns
+
+
 def move_to_collection(ob, coll):
     for c in list(ob.users_collection):
         c.objects.unlink(ob)
@@ -397,7 +405,11 @@ def create_panel(context, name, segs, target=None, garment=None,
     me.materials.append(fabric_material())
 
     ob = bpy.data.objects.new(name, me)
-    move_to_collection(ob, get_collection(context, PATTERN_COLL))
+    collection = get_collection(context, PATTERN_COLL)
+    collection.hide_render = True
+    move_to_collection(ob, collection)
+    if not scn.cd.show_patterns:
+        apply_pattern_visibility(scn)
 
     seen = []
     for sname, _ in segs:

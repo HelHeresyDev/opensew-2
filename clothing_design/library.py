@@ -588,6 +588,29 @@ def preset_rectangle(m, fit=0.0):
                  height=(z - m["zmin"]) / m["height"], ease=0.02)], []
 
 
+def preset_sash(m, fit=0.08):
+    waist = avatar.z_of(m, "waist")
+    half_height = m["height"] * 0.032
+    top_width = avatar.girth_at(m, waist + half_height) * (1.0 + fit) * 0.25
+    bottom_width = avatar.girth_at(m, waist - half_height) * (1.0 + fit) * 0.25
+    segments = [
+        _seg("bottom", [(-bottom_width, -half_height), (bottom_width, -half_height)]),
+        _seg("right", [(bottom_width, -half_height), (top_width, half_height)]),
+        _seg("top", [(top_width, half_height), (-top_width, half_height)]),
+        _seg("left", [(-top_width, half_height), (-bottom_width, -half_height)]),
+    ]
+    height = (waist - m["zmin"]) / m["height"]
+    pieces = [
+        dict(name="Front", segs=segments, anchor='TORSO_FRONT', height=height, ease=0.018),
+        dict(name="Back", segs=segments, anchor='TORSO_BACK', height=height, ease=0.018),
+    ]
+    seams = [
+        ("Front", "right", "Back", "right", False),
+        ("Front", "left", "Back", "left", False),
+    ]
+    return pieces, seams
+
+
 def _arc_angle(m, z, s):
     """Rough arc-length to angle at one height, for placing half panels."""
     r = max(0.02, avatar.radius_at(m, z, 0.0))
@@ -819,6 +842,7 @@ PRESETS = {
     'DRESS':     ("Dress",     preset_dress),
     'JACKET':    ("Jacket",    preset_jacket),
     'HOODIE':    ("Hoodie",    preset_hoodie),
+    'SASH':      ("Waist Sash", preset_sash),
     'RECTANGLE': ("Flat Panel", preset_rectangle),
 }
 

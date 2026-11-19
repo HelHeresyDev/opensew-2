@@ -250,6 +250,15 @@ def garment_object(context, garment=None, create=True):
     return ob
 
 
+def activate_garment(context, garment):
+    """Select an arranged garment by its OpenSew name or Blender mesh object."""
+    ob = garment_object(context, garment, create=False) if isinstance(garment, str) else garment
+    if ob is None or not ob.cd.is_garment or context.scene.objects.get(ob.name) != ob:
+        raise ValueError("Select an arranged garment in the current scene")
+    context.scene.cd.active_garment = bpy.data.objects.find(ob.name)
+    return ob
+
+
 def _chain_bmverts(ob, seg, vmap):
     idx = patterns.segment_verts(ob, seg)
     return [vmap[i] for i in idx if i in vmap]

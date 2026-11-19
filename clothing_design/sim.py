@@ -716,6 +716,13 @@ def relax_garment_steps(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.
     fabric stiffness never lies a garment down (the rest shape holds it),
     but at bending 8 a standing collar has time to fall onto the shoulders.
     """
+    with solve_layer(ob, garment_layers(context)) as underneath:
+        return (yield from _relax_layer_steps(context, ob, underneath, take_in, phase_bend,
+                                              relax_bend, frames, relax_frames))
+
+
+def _relax_layer_steps(context, ob, underneath, take_in, phase_bend, relax_bend,
+                       frames, relax_frames):
     scn = context.scene
     cloth = next((m for m in ob.modifiers if m.type == 'CLOTH'), None)
     if cloth is None:
@@ -731,8 +738,8 @@ def relax_garment_steps(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.
         st.shrink_min = take_in
     cloth.point_cache.frame_end = max(cloth.point_cache.frame_end,
                                       scn.frame_current + frames + relax_frames + 10)
-    for g2 in [o for o in scn.objects if o.cd.is_garment]:
-        for m2 in g2.modifiers:
+    for inner in underneath:
+        for m2 in inner.modifiers:
             if m2.type == 'CLOTH':
                 m2.point_cache.frame_end = max(m2.point_cache.frame_end,
                                                scn.frame_current + frames + relax_frames + 10)
@@ -747,6 +754,7 @@ def relax_garment_steps(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.
     cloth = next(m for m in ob.modifiers if m.type == 'CLOTH')
     cloth.settings.bending_stiffness = relax_bend
     cloth.settings.shrink_min = 0.0
+    cloth.point_cache.frame_end = max(cloth.point_cache.frame_end, scn.frame_current + relax_frames)
     kick_solver(context, ob)
     yield from advance_frames(scn, ob.cd.garment, "Settling", relax_frames)
     return True

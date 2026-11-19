@@ -51,8 +51,8 @@ avatar, so pattern pieces and the body share one scene and one undo stack.
    -1.9, Theo +2.2, zero is the boundary) and every block is then drafted with
    that figure's rules. Override it if the guess is wrong for a stylised body.
    See *Man and woman blocks* below.
-4. **Add Garment / Outfit** — nine garments: T-Shirt, Tank Top, Dress, Jacket,
-   Hoodie, Skirt, Trousers, Jumpsuit, Flat Panel. **Outfit** builds several at
+4. **Add Garment / Outfit** — ten garments: T-Shirt, Tank Top, Dress, Jacket,
+   Hoodie, Skirt, Trousers, Jumpsuit, Waist Sash, Flat Panel. **Outfit** builds several at
    once, each on its own layer; the list follows the figure. Man: Casual,
    Streetwear, Workwear, Full Layers. Woman: Casual, Summer, Dress & Jacket,
    Streetwear, Workwear.
