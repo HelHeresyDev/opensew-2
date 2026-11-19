@@ -1179,12 +1179,10 @@ def sew_steps(context, targets):
         for garment in targets:
             name = garment.cd.garment
             scn.cd.garment_name = name
-            scn.frame_set(start)
-            if len(targets) > 1:
-                build.sync_garment(context, garment=name)
-            others = [g for g in sim.garment_layers(context)
-                      if g.cd.layer < garment.cd.layer and g != garment]
-            with sim.cages_only(others):
+            with sim.solve_layer(garment, sim.garment_layers(context)) as others:
+                scn.frame_set(start)
+                if len(targets) > 1:
+                    build.sync_garment(context, garment=name)
                 sim.setup_cloth(context, garment)
                 sim.kick_solver(context, garment)
                 layered_top = any(

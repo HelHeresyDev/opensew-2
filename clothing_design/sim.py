@@ -158,48 +158,46 @@ DISPLAY_MODS = {'SUBSURF', 'SOLIDIFY'}
 
 
 @contextmanager
-def sim_cage_only(ob):
-    """Temporarily switch off the modifiers that change the vertex count.
-
-    Freezing the shape and the grab tool both map evaluated vertices back onto
-    the base mesh one-for-one, which a subdivision surface would break.
-    """
-    off = []
-    for m in ob.modifiers:
-        if m.type in DISPLAY_MODS and m.show_viewport:
-            m.show_viewport = False
-            off.append(m)
+def _disable_viewport(modifiers):
+    disabled = []
     try:
+        for modifier in modifiers:
+            if modifier.show_viewport:
+                modifier.show_viewport = False
+                disabled.append(modifier)
         yield
     finally:
-        for m in off:
-            m.show_viewport = True
+        for modifier in disabled:
+            modifier.show_viewport = True
+
+
+@contextmanager
+def sim_cage_only(ob):
+    """Evaluate a garment on its cage so vertices still map to the original mesh."""
+    with cages_only([ob]):
+        yield
 
 
 @contextmanager
 def cages_only(obs):
-    """Drop the display modifiers on a set of objects for the duration.
-
-    A garment used as a collider should present the surface it was simulated
-    as, not the one it is displayed as. A finalized garment carries
-    subdivision and solidify, and cloth simulated against that - a dense,
-    double-walled shell - behaves quite differently: a t-shirt sewn over
-    finalized trousers ended up 13 cm lower than the same t-shirt sewn over
-    the same trousers before they were finalized.
-    """
-    off = []
-    for ob in obs:
-        if ob is None:
-            continue
-        for m in ob.modifiers:
-            if m.type in DISPLAY_MODS and m.show_viewport:
-                m.show_viewport = False
-                off.append(m)
-    try:
+    """Use the same collision cage before and after finalizing an inner layer."""
+    modifiers = (mod for ob in obs if ob is not None
+                 for mod in ob.modifiers if mod.type in DISPLAY_MODS)
+    with _disable_viewport(modifiers):
         yield
-    finally:
-        for m in off:
-            m.show_viewport = True
+
+
+@contextmanager
+def solve_layer(garment, layers):
+    """Evaluate only the garment being sewn and the physics it depends on."""
+    underneath = [other for other in layers if other.cd.layer < garment.cd.layer]
+    inactive = [other for other in layers
+                if other != garment and other.cd.layer >= garment.cd.layer]
+    other_physics = [mod for ob in inactive
+                     for mod in ob.modifiers if mod.type in {'CLOTH', 'COLLISION'}]
+    own_collision = [mod for mod in garment.modifiers if mod.type == 'COLLISION']
+    with _disable_viewport(other_physics + own_collision), cages_only(underneath):
+        yield underneath
 
 
 MOD_ORDER = ('ARMATURE', 'CLOTH', 'SUBSURF', 'SOLIDIFY')

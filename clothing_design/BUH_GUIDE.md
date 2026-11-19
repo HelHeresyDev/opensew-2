@@ -79,6 +79,12 @@ result = ops.step_sew(bpy.context, frames_per_call=1)
 
 Use `ops.simulation_status()` to read progress after an interrupted request and `ops.cancel_sew()` to stop and keep the current state. Once the job completes and you have checked the fit and weld counts, set `bpy.context.scene.cd.garment_name` to the same name before calling `bpy.ops.cd.finalize()`. The existing `bpy.ops.cd.sew()` and `bpy.ops.cd.drape()` calls still run synchronously for standalone Blender scripts.
 
+### Layered sewing performance
+
+OpenSew pauses cloth and collision modifiers on outer garments while sewing underneath them. Inner garments still act as colliders. For a layered outfit, sew and finalize the inner garments first so later solves can use them as fitted colliders. The outer layers resume their previous modifier settings when the sew finishes or is cancelled.
+
+On the project machine with Blender 5.3, a four-garment scene took 62.9 seconds to sew and settle its T-shirt in BUH 1.0.2. BUH 1.0.3 took 12.4 seconds at the same mesh resolution, cloth quality, and frame counts. Through headless Blender MCP, the 1.0.3 test finished in four calls with `frames_per_call=10`. The slowest call took 3.74 seconds. All 160 stitches welded and the final shirt had zero measured body intersections.
+
 ### Cultivator outfit experiment
 
 The verified stock T-shirt and jacket use their default sleeve lengths. The longer 92 cm T-shirt sleeves and the open, knee-length jacket are separate fitting cases from the report. A crossed collar needs overlapping front pattern pieces. A sash needs a closed waist construction or an attachment to the garment underneath before gravity is enabled.
@@ -88,7 +94,7 @@ The verified stock T-shirt and jacket use their default sleeve lengths. The long
 Run from the fork root with the add-on available to Blender. The targeted fit and UI tests import the checkout directly.
 
 ```sh
-blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped
+blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped --outer-layer
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --figure WOMAN --operation drape
 blender --factory-startup --enable-event-simulate --python-exit-code 1 --python tests/test_simulation_ui.py
 ```

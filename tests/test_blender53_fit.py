@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--figure", choices=("MAN", "WOMAN"), default="MAN")
     parser.add_argument("--preset", choices=("TSHIRT", "TANK", "TROUSERS", "JACKET"), default="TSHIRT")
     parser.add_argument("--operation", choices=("sew", "drape", "stepped"), default="sew")
+    parser.add_argument("--outer-layer", action="store_true")
     parser.add_argument("--save", type=Path)
     opts = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
 
@@ -25,6 +26,18 @@ def main():
     assert bpy.ops.cd.add_garment(preset=opts.preset) == {'FINISHED'}
     garment = build.garment_object(context, create=False)
     assert build.loose_edges(garment.data)
+    outer_physics = []
+    if opts.outer_layer:
+        assert bpy.ops.cd.add_garment(preset="JACKET", name="Outer layer") == {'FINISHED'}
+        outer = build.garment_object(context, create=False)
+        outer_physics = [mod for mod in outer.modifiers if mod.type in {'CLOTH', 'COLLISION'}]
+        assert len(outer_physics) == 2 and all(mod.show_viewport for mod in outer_physics)
+        context.scene.cd.garment_name = garment.cd.garment
+        ops.start_sew(context, garment.cd.garment)
+        status = ops.step_sew(context, frames_per_call=2)
+        assert status["stage_frame"] == 0 and not any(mod.show_viewport for mod in outer_physics)
+        assert ops.cancel_sew()["state"] == "cancelled"
+        assert all(mod.show_viewport for mod in outer_physics)
     before = time.monotonic()
     if opts.operation == "stepped":
         status = ops.start_sew(context, garment.cd.garment)
@@ -40,6 +53,7 @@ def main():
     assert status["state"] == "finished", status
     assert status["frame"] == 76 and status["phase"] == "Settling", status
     assert not build.loose_edges(garment.data)
+    assert all(mod.show_viewport for mod in outer_physics)
 
     fit = sim.body_fit(context, garment)
     print(f"{bpy.app.version_string} {opts.figure} {opts.preset}: {fit}", flush=True)
