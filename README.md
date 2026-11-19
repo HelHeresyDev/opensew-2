@@ -6,6 +6,8 @@ Free and open source. No subscription, no login server, no external dependencies
 
 ![Draft, arrange, sew, drape, grab](docs/demo.gif)
 
+The Beneath Uncounted Heavens fork adds Blender 5.3 simulation progress and cancellation, revised T-shirt and jacket fitting, and a garment fit check for Blender MCP. See the [fork guide](clothing_design/BUH_GUIDE.md).
+
 ## What it does
 
 - **Measures your character.** Point it at any rigged body mesh. Landmarks are read off the *mesh*, not off bone names: the waist is the narrowest section, the hip the fullest over the seat, the chest the fullest below the shoulder. Rigs disagree about where a "chest" bone belongs — CC4 puts it at 71 % of stature and Mixamo at 76 %, 8 cm apart on the same body — and drafting from that instead is how a block ends up with an armhole down at the waist. Tested across bodies from 145 cm to 217 cm, chest 86 to 117 cm, in `tests/test_bodies.py`. It takes a stack of cross-sections and the limb axes from the armature, masking the arms and head out by skin weight so a figure with its arms down doesn't measure as having a 112 cm waist.
@@ -28,11 +30,11 @@ The flat pieces on their own — T-shirt, trousers and jacket, every one drafted
 
 ## Install
 
-Built and tested on **Blender 5.2**. Nothing else to install.
+Upstream was tested on Blender 5.2. This fork was tested on Blender 5.3.0.
 
 1. Download this repository as a zip (or clone it).
 2. Zip the `clothing_design` folder on its own: `zip -r clothing_design.zip clothing_design -x '*__pycache__*'`
-3. Blender: *Edit > Preferences > Add-ons > Install from Disk…*, pick the zip, tick **Clothing Design**.
+3. Blender: *Edit > Preferences > Add-ons > Install from Disk…*, pick the zip, enable **Clothing Design (Beneath Uncounted Heavens)**.
 
 Developing? Symlink `clothing_design/` into `scripts/addons/` instead and edits are live after *Reload Scripts*.
 

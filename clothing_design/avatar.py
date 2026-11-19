@@ -619,13 +619,13 @@ def auto_facing(context, ob):
 _BVH = {}
 
 
-def body_bvh(context, ob=None):
+def body_bvh(context, ob=None, *, refresh=False):
     """World-space BVH of the avatar, for keeping arranged panels out of the body."""
     ob = ob or context.scene.cd.avatar
     if ob is None or ob.type != 'MESH':
         return None
     key = (ob.name, context.scene.frame_current)
-    if _BVH.get("key") == key:
+    if not refresh and _BVH.get("key") == key:
         return _BVH.get("tree")
     dg = context.evaluated_depsgraph_get()
     ev = ob.evaluated_get(dg)

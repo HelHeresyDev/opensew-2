@@ -3,9 +3,9 @@
 #   2D pattern pieces  ->  arranged on the measured body  ->  sewn by cloth
 #   sewing springs  ->  draped against the body  ->  welded, thickened, rigged.
 bl_info = {
-    "name": "Clothing Design",
+    "name": "Clothing Design (Beneath Uncounted Heavens)",
     "author": "Marcello Morettoni",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Clothing  |  Workspace: Clothing Design",
     "description": "Draw 2D patterns, sew them into a garment and simulate it onto your character",

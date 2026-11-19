@@ -1,7 +1,7 @@
 # Clothing Design — a pattern-based garment workflow for Blender
 
 Draw flat pattern pieces, sew them together, and simulate them onto your
-character. Built and tested against Blender 5.2.
+character. See the [fork guide](BUH_GUIDE.md) for Blender 5.3 and Blender MCP.
 
 ## Install
 

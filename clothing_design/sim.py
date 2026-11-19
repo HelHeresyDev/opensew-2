@@ -536,14 +536,16 @@ def close_seams(context, ob):
     # solve inside a collider is trapped there for good. Push them back out
     # while the mesh is being edited anyway.
     from . import avatar as _av
-    bvh = _av.body_bvh(context)
+    bvh = _av.body_bvh(context, refresh=True)
     if bvh is not None:
-        for v in ob.data.vertices:
-            hit = bvh.find_nearest(v.co)
-            if hit is not None and hit[0] is not None:
-                gap = (v.co - hit[0]).dot(hit[1])
-                if gap < 0.002:
-                    v.co = hit[0] + hit[1] * 0.003
+        world = ob.matrix_world
+        local = world.inverted_safe()
+        for vertex in ob.data.vertices:
+            point = world @ vertex.co
+            nearest, normal, _, _ = bvh.find_nearest(point)
+            if nearest is not None and (point - nearest).dot(normal) < 0.002:
+                vertex.co = local @ (nearest + normal * 0.003)
+        ob.data.update()
     setup_cloth(context, ob)
     for mod in ob.modifiers:
         if mod.type == 'CLOTH':
@@ -560,6 +562,35 @@ def close_seams(context, ob):
     except Exception:
         pass
     return merged, skipped
+
+
+def body_fit(context, ob, tolerance=0.004):
+    """Measure vertex penetration and intersecting faces on the displayed garment."""
+    from . import avatar
+    from mathutils.bvhtree import BVHTree
+
+    body = avatar.body_bvh(context, refresh=True)
+    if body is None:
+        raise ValueError("Set an avatar before checking garment fit")
+    evaluated = ob.evaluated_get(context.evaluated_depsgraph_get())
+    mesh = evaluated.data
+    mesh.calc_loop_triangles()
+    coords = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
+    faces = [tuple(tri.vertices) for tri in mesh.loop_triangles]
+    if not faces:
+        raise ValueError("Arrange the garment before checking its fit")
+
+    inside = 0
+    deepest = 0.0
+    for point in coords:
+        nearest, normal, _, _ = body.find_nearest(point)
+        gap = (point - nearest).dot(normal)
+        inside += gap < -tolerance
+        deepest = max(deepest, -gap)
+    surface = BVHTree.FromPolygons(coords, faces, all_triangles=True)
+    intersecting = {face for face, _ in surface.overlap(body)}
+    return {"vertices": len(coords), "vertices_inside": inside,
+            "intersecting_triangles": len(intersecting), "max_depth_m": deepest}
 
 
 def set_gravity(ob, factor):
@@ -650,8 +681,28 @@ def kick_solver(context, ob):
         pass
 
 
+def advance_frames(scene, garment, phase, frames):
+    for step in range(1, frames + 1):
+        scene.frame_set(scene.frame_current + 1)
+        yield phase, garment, step, frames
+
+
+def _run_frames(steps):
+    while True:
+        try:
+            next(steps)
+        except StopIteration as result:
+            return result.value
+
+
 def relax_garment(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.0,
                   frames=60, relax_frames=90):
+    return _run_frames(relax_garment_steps(context, ob, take_in, phase_bend, relax_bend,
+                                           frames, relax_frames))
+
+
+def relax_garment_steps(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.0,
+                        frames=60, relax_frames=90):
     """Finishing pass: steam the garment onto the body, then let it rest.
 
     The weld bakes the mid-drape shape as the cloth's new rest shape, and at
@@ -687,8 +738,8 @@ def relax_garment(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.0,
             if m2.type == 'CLOTH':
                 m2.point_cache.frame_end = max(m2.point_cache.frame_end,
                                                scn.frame_current + frames + relax_frames + 10)
-    for _ in range(frames):
-        scn.frame_set(scn.frame_current + 1)
+    yield from advance_frames(scn, ob.cd.garment, "Relaxing", frames)
+    yield "Freezing", ob.cd.garment, 0, 1
     bake_shape(context, ob)
     for m in list(ob.modifiers):
         if m.type == 'CLOTH':
@@ -699,8 +750,7 @@ def relax_garment(context, ob, take_in=0.06, phase_bend=2.0, relax_bend=8.0,
     cloth.settings.bending_stiffness = relax_bend
     cloth.settings.shrink_min = 0.0
     kick_solver(context, ob)
-    for _ in range(relax_frames):
-        scn.frame_set(scn.frame_current + 1)
+    yield from advance_frames(scn, ob.cd.garment, "Settling", relax_frames)
     return True
 
 
@@ -811,6 +861,10 @@ def freeze_garment(context, ob):
 
 
 def relax_outfit(context):
+    return _run_frames(relax_outfit_steps(context))
+
+
+def relax_outfit_steps(context):
     """Finish the outfit: freeze the under-layers where they settled, then
     run the relax pass over the outerwear. Freezing matters - the relax
     advances the simulation, and a low-rise waistband that held for the
@@ -822,40 +876,42 @@ def relax_outfit(context):
     outermost = layers[-1] if layers else None
     plan = [(g, g is outermost and not any(k in g.cd.garment.lower() for k in RELAX_SKIP))
             for g in layers]
-    # Freeze the whole outfit first, then relax exactly one garment at a
-    # time. Relaxing advances the scene by a hundred frames, and any other
-    # garment still carrying a solver would drift through them unwatched -
-    # which is precisely how an inner tank ends up poking out of the jacket
-    # worn over it. A frozen garment holds its shape and still collides.
-    for g, _ in plan:
-        freeze_garment(context, g)
-    n = 0
-    # innermost first: an outer layer is lifted, measured and relaxed against
-    # inner layers already in their final shape - what it is really worn over
-    for g, relaxes in plan:
-        # De-interleave first, always. A jacket sleeve is arranged around the
-        # arm, not around the arm plus the shirt already on it, so outerwear
-        # can come out of the sew stage threaded through the layer beneath -
-        # and a garment already tangled measures as snug, so leaving this to
-        # the relax test would let exactly the worst case slip through.
-        moved = lift_off_layers(context, g)
-        if not relaxes:
-            continue
-        # a garment already lying down is left alone; 1 cm of take-in per
-        # centimetre of standoff beyond the collision gap layered cloth needs
-        # capped at 6%: taking a garment in shortens it as well as narrowing
-        # it, and past this the hem climbs far enough to read as cropped
-        take = min(0.06, max(0.0, (garment_hover(context, g) - 0.012) * 10.0))
-        # anything that had to be lifted is re-seated even if it now measures
-        # snug: the lift leaves it standing off the layer it was pulled out of
-        if moved > max(20, len(g.data.vertices) // 100):
-            take = max(take, 0.03)
-        if take >= 0.02:
-            scn.cd.garment_name = g.cd.garment
-            if relax_garment(context, g, take_in=take):
-                n += 1
+    try:
+        # Freeze the whole outfit first, then relax exactly one garment at a
+        # time. Relaxing advances the scene by a hundred frames, and any other
+        # garment still carrying a solver would drift through them unwatched -
+        # which is precisely how an inner tank ends up poking out of the jacket
+        # worn over it. A frozen garment holds its shape and still collides.
+        for g, _ in plan:
             freeze_garment(context, g)
-    scn.cd.garment_name = prev
+        n = 0
+        # innermost first: an outer layer is lifted, measured and relaxed against
+        # inner layers already in their final shape - what it is really worn over
+        for g, relaxes in plan:
+            # De-interleave first, always. A jacket sleeve is arranged around the
+            # arm, not around the arm plus the shirt already on it, so outerwear
+            # can come out of the sew stage threaded through the layer beneath -
+            # and a garment already tangled measures as snug, so leaving this to
+            # the relax test would let exactly the worst case slip through.
+            moved = lift_off_layers(context, g)
+            if not relaxes:
+                continue
+            # a garment already lying down is left alone; 1 cm of take-in per
+            # centimetre of standoff beyond the collision gap layered cloth needs
+            # capped at 6%: taking a garment in shortens it as well as narrowing
+            # it, and past this the hem climbs far enough to read as cropped
+            take = min(0.06, max(0.0, (garment_hover(context, g) - 0.012) * 10.0))
+            # anything that had to be lifted is re-seated even if it now measures
+            # snug: the lift leaves it standing off the layer it was pulled out of
+            if moved > max(20, len(g.data.vertices) // 100):
+                take = max(take, 0.03)
+            if take >= 0.02:
+                scn.cd.garment_name = g.cd.garment
+                if (yield from relax_garment_steps(context, g, take_in=take)):
+                    n += 1
+                freeze_garment(context, g)
+    finally:
+        scn.cd.garment_name = prev
     return n
 
 

@@ -329,11 +329,12 @@ def preset_tshirt(m, fit=0.14, sleeve_len=None):
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
     sleeve_h = _sleeve_height(cap_h, sl, arm_total)
 
+    arrangement_ease = 0.04
     pieces = [
-        dict(name="Front", segs=front, anchor='TORSO_FRONT', height=body_h, ease=0.018),
-        dict(name="Back",  segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.018),
-        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sleeve_h, ease=0.014),
-        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sleeve_h, ease=0.014),
+        dict(name="Front", segs=front, anchor='TORSO_FRONT', height=body_h, ease=arrangement_ease),
+        dict(name="Back",  segs=back,  anchor='TORSO_BACK',  height=body_h, ease=arrangement_ease),
+        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sleeve_h, ease=arrangement_ease),
+        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sleeve_h, ease=arrangement_ease),
     ]
     # flip says whether the two edges run in opposite directions along the outline
     seams = [
@@ -691,19 +692,22 @@ def preset_jacket(m, fit=0.12, length_to="hip", sleeve_len=None, closed_front=Tr
     arm_total = sum(m.get("limbs", {}).get(k, {}).get("len", 0.0) for k in ("arm_l", "farm_l"))
     # cut past the wrist: a long sleeve takes up several centimetres bunching
     # over the elbow, so one drafted to the arm's length settles short of it
-    sl = sleeve_len if sleeve_len is not None else max(0.20, arm_total * 1.08)
-    sleeve, cw, cap_h = _sleeve(d, fit, sl)
-    sh = _sleeve_height(cap_h, sl, arm_total)
+    default_length = max(0.20, arm_total * 1.08)
+    sl = sleeve_len if sleeve_len is not None else default_length
+    sleeve, _, _ = _sleeve(d, fit, sl)
+    sleeve_height = 0.48
+    if arm_total > 1e-6:
+        sleeve_height += (sl - default_length) / (2.0 * arm_total)
     body_h = (z["shoulder"] + SHELF - L * 0.5 - m["zmin"]) / m["height"]
     # closed: both halves arranged meeting at centre front, where they are
     # sewn. Open: spun apart so the lapels hang loose to either side.
     off = 0.0 if closed_front else _arc_angle(m, z["chest"], (half - overlap) * 0.5)
     pieces = [
-        dict(name="Front_L", segs=left,  anchor='TORSO_FRONT', height=body_h, ease=0.034, spin=off),
-        dict(name="Front_R", segs=right, anchor='TORSO_FRONT', height=body_h, ease=0.034, spin=-off),
-        dict(name="Back",    segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.034),
-        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sh, ease=0.032),
-        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sh, ease=0.032),
+        dict(name="Front_L", segs=left,  anchor='TORSO_FRONT', height=body_h, ease=0.05, spin=off),
+        dict(name="Front_R", segs=right, anchor='TORSO_FRONT', height=body_h, ease=0.05, spin=-off),
+        dict(name="Back",    segs=back,  anchor='TORSO_BACK',  height=body_h, ease=0.05),
+        dict(name="Sleeve_L", segs=sleeve, anchor='ARM_L', height=sleeve_height, ease=0.05),
+        dict(name="Sleeve_R", segs=sleeve, anchor='ARM_R', height=sleeve_height, ease=0.05),
     ]
     seams = [
         ("Front_L", "side_L", "Back", "side_L", False),

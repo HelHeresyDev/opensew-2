@@ -1,5 +1,5 @@
 # Clothing Design - operators.
-import bpy, bmesh, math, json, os
+import bpy, bmesh, math, json, os, traceback
 from bpy.props import (StringProperty, BoolProperty, FloatProperty, IntProperty,
                        EnumProperty, FloatVectorProperty)
 from bpy.types import Operator
@@ -280,7 +280,107 @@ def _outfit_items(self, context):
     return _OUTFIT_ITEMS
 
 
-class CD_OT_add_outfit(Operator):
+_active_simulation = None
+_simulation_status = {"state": "idle"}
+
+
+def simulation_status():
+    """Return the progress or result of the most recent simulation in this session."""
+    return _simulation_status.copy()
+
+
+class SimulationOperator:
+    @classmethod
+    def poll(cls, context):
+        if _active_simulation is not None:
+            cls.poll_message_set("A clothing simulation is already running")
+            return False
+        return context.scene is not None
+
+    def _start(self, context):
+        global _active_simulation, _simulation_status
+        _active_simulation = self
+        _simulation_status = {"state": "running", "operation": self.bl_idname}
+        self._scene = context.scene
+        self._steps = None
+        self._timer = None
+
+    def _advance(self, context):
+        try:
+            if self._steps is None:
+                self._steps = self.steps(context)
+            phase, garment, current, total = next(self._steps)
+        except StopIteration as result:
+            return self._finish(context, "finished", result.value)
+        except ValueError as error:
+            return self._finish(context, "failed", str(error))
+        except Exception as error:
+            traceback.print_exc()
+            return self._finish(context, "failed", str(error))
+        _simulation_status.update(phase=phase, garment=garment, stage_frame=current,
+                                  stage_frames=total, frame=self._scene.frame_current)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        self._start(context)
+        result = {'RUNNING_MODAL'}
+        while result == {'RUNNING_MODAL'}:
+            result = self._advance(context)
+        return result
+
+    def invoke(self, context, event):
+        if bpy.app.background or context.window is None:
+            return self.execute(context)
+        if context.screen.is_animation_playing:
+            self.report({'ERROR'}, "Stop playback before starting a clothing simulation")
+            return {'CANCELLED'}
+        self._start(context)
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.02, window=context.window)
+        wm.modal_handler_add(self)
+        context.workspace.status_text_set("Clothing simulation starting. Esc to stop")
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type == 'ESC' and event.value == 'PRESS':
+            return self._stop(context)
+        if event.type == 'TIMER':
+            if context.scene != self._scene:
+                return self._stop(context)
+            result = self._advance(context)
+            if result == {'RUNNING_MODAL'}:
+                progress = simulation_status()
+                context.workspace.status_text_set(
+                    "{phase} {garment}  {stage_frame}/{stage_frames}  |  Esc to stop".format(**progress))
+            return result
+        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'MIDDLEMOUSE',
+                          'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM'}:
+            return {'PASS_THROUGH'}
+        return {'RUNNING_MODAL'}
+
+    def _finish(self, context, state, message):
+        global _active_simulation
+        try:
+            if self._steps is not None:
+                self._steps.close()
+        finally:
+            _active_simulation = None
+            if self._timer is not None:
+                context.window_manager.event_timer_remove(self._timer)
+                self._timer = None
+                context.workspace.status_text_set(None)
+        _simulation_status.update(state=state, message=message, frame=self._scene.frame_current)
+        self.report({'ERROR'} if state == "failed" else {'INFO'}, message)
+        return {'FINISHED'} if state == "finished" else {'CANCELLED'}
+
+    def _stop(self, context):
+        return self._finish(context, "cancelled", "Simulation stopped at the current frame")
+
+    def cancel(self, context):
+        self._stop(context)
+
+
+class CD_OT_add_outfit(SimulationOperator, Operator):
     bl_idname = "cd.add_outfit"
     bl_label = "Add Outfit"
     bl_description = ("Build a complete outfit: several garments drafted and stacked on "
@@ -297,7 +397,7 @@ class CD_OT_add_outfit(Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=300)
 
-    def execute(self, context):
+    def _draft(self, context):
         scn = context.scene
         if scn.cd.avatar is None:
             bpy.ops.cd.import_character()
@@ -310,11 +410,20 @@ class CD_OT_add_outfit(Operator):
             except Exception as e:
                 self.report({'WARNING'}, "%s failed: %s" % (preset, e))
         sim.setup_layers(context)
+        return label, made
+
+    def execute(self, context):
+        if self.sew_now and self.options.is_invoke and not bpy.app.background:
+            return SimulationOperator.invoke(self, context, None)
+        return super().execute(context)
+
+    def steps(self, context):
+        label, made = self._draft(context)
         if self.sew_now and made:
-            bpy.ops.cd.sew(all_garments=True)
-            sim.relax_outfit(context)
-        self.report({'INFO'}, "%s: %s" % (label, " over ".join(made)))
-        return {'FINISHED'}
+            sewn = yield from sew_steps(context, sim.garment_layers(context))
+            yield from sim.relax_outfit_steps(context)
+            return f"{label}: {sewn}"
+        return f"{label}: {' over '.join(made)}"
 
 
 class CD_OT_sync(Operator):
@@ -984,7 +1093,59 @@ class CD_OT_unsew(Operator):
         return {'FINISHED'}
 
 
-class CD_OT_sew(Operator):
+def sew_steps(context, targets):
+    if not targets:
+        raise ValueError("No garment to sew")
+    scn = context.scene
+    sim.ensure_collider(context, scn.cd.avatar)
+    sim.setup_layers(context)
+    previous = scn.cd.garment_name
+    start = scn.frame_current
+    messages = []
+    try:
+        for garment in targets:
+            name = garment.cd.garment
+            scn.cd.garment_name = name
+            scn.frame_set(start)
+            if len(targets) > 1:
+                build.sync_garment(context, garment=name)
+            others = [g for g in sim.garment_layers(context)
+                      if g.cd.layer < garment.cd.layer and g != garment]
+            with sim.cages_only(others):
+                sim.setup_cloth(context, garment)
+                sim.kick_solver(context, garment)
+                layered_top = any(
+                    piece.cd.anchor in {'TORSO_FRONT', 'TORSO_BACK'}
+                    for inner in others
+                    for piece in build.garment_pieces(context, inner.cd.garment)
+                )
+                pinned = layered_top and sim.pin_shoulders(context, garment)
+                sim.set_gravity(garment, scn.cd.stitch_gravity)
+                try:
+                    stitch_frames = scn.cd.stitch_frames
+                    hold = int(stitch_frames * sim.PIN_HOLD) if pinned else -1
+                    for progress in sim.advance_frames(scn, name, "Stitching", stitch_frames):
+                        yield progress
+                        if progress[2] == hold:
+                            sim.pin_shoulders(context, garment, torso_anchors=('TORSO_BACK',))
+                    if scn.cd.auto_close:
+                        yield "Welding", name, 0, 1
+                        merged, skipped = sim.close_seams(context, garment)
+                        message = f"{name} ({merged} welded, {skipped} open stitches removed)"
+                    else:
+                        message = name
+                finally:
+                    if pinned:
+                        sim.unpin_shoulders(garment)
+                    sim.set_gravity(garment, 1.0)
+                yield from sim.advance_frames(scn, name, "Settling", scn.cd.settle_frames)
+            messages.append(message)
+    finally:
+        scn.cd.garment_name = previous
+    return "Sewn: " + ", ".join(messages)
+
+
+class CD_OT_sew(SimulationOperator, Operator):
     bl_idname = "cd.sew"
     bl_label = "Sew"
     bl_description = ("Stitch the seams closed, weld them and let the garment settle. "
@@ -993,58 +1154,10 @@ class CD_OT_sew(Operator):
 
     all_garments: BoolProperty(name="Every Garment", default=False)
 
-    def execute(self, context):
-        scn = context.scene
-        targets = (sim.garment_layers(context) if self.all_garments
-                   else [g for g in [_active_garment(context)] if g])
-        if not targets:
-            self.report({'ERROR'}, "No garment to sew")
-            return {'CANCELLED'}
-        sim.ensure_collider(context, scn.cd.avatar)
-        sim.setup_layers(context)
-        prev = scn.cd.garment_name
-        start = scn.frame_current
-        msgs = []
-        # the garments this one is worn over collide as their cages, so a
-        # finalized layer behaves the same as an unfinalized one
-        others = [o for o in scn.objects if o.cd.is_garment and o not in targets]
-        for g in targets:
-            scn.cd.garment_name = g.cd.garment
-            scn.frame_set(start)
-            if len(targets) > 1:
-                # re-arrange over the layers already sewn beneath this one -
-                # when the outfit was drafted they were still flat panels
-                build.sync_garment(context, garment=g.cd.garment)
-            sim.setup_cloth(context, g)
-            sim.kick_solver(context, g)
-            # hold the collar on the shoulders while the seams close; from 60%
-            # keep only the back collar - the part the garment hangs from - so
-            # the front can draw in to the neck before it is welded
-            pinned = sim.pin_shoulders(context, g)
-            hold = int(scn.cd.stitch_frames * sim.PIN_HOLD) if pinned else -1
-            sim.set_gravity(g, scn.cd.stitch_gravity)
-            with sim.cages_only(others):
-                for i in range(scn.cd.stitch_frames):
-                    if i == hold:
-                        sim.pin_shoulders(context, g, torso_anchors=('TORSO_BACK',))
-                    scn.frame_set(scn.frame_current + 1)
-            merged = 0
-            if scn.cd.auto_close:
-                merged, _ = sim.close_seams(context, g)
-            sim.unpin_shoulders(g)
-            sim.set_gravity(g, 1.0)
-            with sim.cages_only(others):
-                for _ in range(scn.cd.settle_frames):
-                    scn.frame_set(scn.frame_current + 1)
-            msgs.append("%s (%d welded)" % (g.cd.garment, merged))
-        # (A relax pass here was tried and reverted: taking the fabric in
-        # smooths a garment measured on its own, but on the body it drags an
-        # open-front jacket back down off the shoulders. Relax stays an
-        # outfit-level finish, where the layers underneath hold it up, and a
-        # button users can press.)
-        scn.cd.garment_name = prev
-        self.report({'INFO'}, "Sewn: " + ", ".join(msgs))
-        return {'FINISHED'}
+    def steps(self, context):
+        garment = _active_garment(context)
+        targets = sim.garment_layers(context) if self.all_garments else ([garment] if garment else [])
+        return sew_steps(context, targets)
 
 
 class CD_OT_setup_layers(Operator):
@@ -1099,82 +1212,16 @@ class CD_OT_setup_sim(Operator):
         return {'FINISHED'}
 
 
-class CD_OT_drape(Operator):
+class CD_OT_drape(SimulationOperator, Operator):
     bl_idname = "cd.drape"
     bl_label = "Sew & Drape"
     bl_description = ("Pull the seams closed, weld them into one continuous garment, "
                       "then let it settle on the body")
     bl_options = {'REGISTER'}
 
-    _timer = None
-
-    def _prepare(self, context):
-        scn = context.scene
-        ob = build.garment_object(context, create=False)
-        if ob is None:
-            self.report({'ERROR'}, "No garment - press Arrange on Body first")
-            return None
-        sim.setup_cloth(context, ob)
-        sim.ensure_collider(context, scn.cd.avatar)
-        sim.set_gravity(ob, scn.cd.stitch_gravity)
-        self.ob = ob
-        self.stitch_end = scn.frame_current + scn.cd.stitch_frames
-        self.settle_end = self.stitch_end + scn.cd.settle_frames
-        self.closed = False
-        self.merged = 0
-        return ob
-
-    def _close(self, context):
-        scn = context.scene
-        self.closed = True
-        if scn.cd.auto_close:
-            self.merged, _ = sim.close_seams(context, self.ob)
-        sim.set_gravity(self.ob, 1.0)
-
-    def execute(self, context):
-        scn = context.scene
-        if self._prepare(context) is None:
-            return {'CANCELLED'}
-        while scn.frame_current < self.stitch_end:
-            scn.frame_set(scn.frame_current + 1)
-        self._close(context)
-        while scn.frame_current < self.settle_end:
-            scn.frame_set(scn.frame_current + 1)
-        self.report({'INFO'}, "Sewn and draped (%d seam verts welded)" % self.merged)
-        return {'FINISHED'}
-
-    def invoke(self, context, event):
-        if self._prepare(context) is None:
-            return {'CANCELLED'}
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.01, window=context.window)
-        wm.modal_handler_add(self)
-        context.workspace.status_text_set("Stitching... Esc to stop")
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        scn = context.scene
-        if event.type in {'ESC', 'RIGHTMOUSE'}:
-            return self._finish(context)
-        if event.type == 'TIMER':
-            if not self.closed and scn.frame_current >= self.stitch_end:
-                self._close(context)
-                context.workspace.status_text_set("Settling... Esc to stop")
-                return {'RUNNING_MODAL'}
-            if self.closed and scn.frame_current >= self.settle_end:
-                return self._finish(context)
-            scn.frame_set(scn.frame_current + 1)
-        return {'RUNNING_MODAL'}
-
-    def _finish(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-            self._timer = None
-        context.workspace.status_text_set(None)
-        self.report({'INFO'}, "Drape finished at frame %d (%d seam verts welded)"
-                    % (context.scene.frame_current, self.merged))
-        return {'FINISHED'}
+    def steps(self, context):
+        garment = _active_garment(context)
+        return sew_steps(context, [garment] if garment else [])
 
 
 class CD_OT_close_seams(Operator):
@@ -1196,18 +1243,17 @@ class CD_OT_close_seams(Operator):
         return {'FINISHED'}
 
 
-class CD_OT_settle(Operator):
+class CD_OT_settle(SimulationOperator, Operator):
     bl_idname = "cd.settle"
     bl_label = "Settle"
     bl_description = "Keep simulating the garment where it is"
     bl_options = {'REGISTER'}
 
-    def execute(self, context):
+    def steps(self, context):
         scn = context.scene
         ob = build.garment_object(context, create=False)
         if ob is None:
-            self.report({'ERROR'}, "No garment")
-            return {'CANCELLED'}
+            raise ValueError("No garment")
         # Add Outfit leaves its garments frozen (baked, solver dropped) so the
         # layers stay where they settled; put a solver back if asked to run on
         if not any(m.type == 'CLOTH' for m in ob.modifiers):
@@ -1215,14 +1261,11 @@ class CD_OT_settle(Operator):
             sim.setup_layers(context)
             sim.setup_cloth(context, ob)
         sim.set_gravity(ob, 1.0)
-        end = scn.frame_current + scn.cd.settle_frames
-        while scn.frame_current < end:
-            scn.frame_set(scn.frame_current + 1)
-        self.report({'INFO'}, "Settled to frame %d" % scn.frame_current)
-        return {'FINISHED'}
+        yield from sim.advance_frames(scn, ob.cd.garment, "Settling", scn.cd.settle_frames)
+        return f"Settled to frame {scn.frame_current}"
 
 
-class CD_OT_relax(Operator):
+class CD_OT_relax(SimulationOperator, Operator):
     bl_idname = "cd.relax"
     bl_label = "Relax"
     bl_description = ("Finishing pass: soften the fabric and take it in a little so "
@@ -1234,20 +1277,14 @@ class CD_OT_relax(Operator):
     take_in: FloatProperty(name="Take In", default=0.06, min=0.0, max=0.3,
                            description="How much the fabric is taken in while it wraps")
 
-    def execute(self, context):
+    def steps(self, context):
         ob = build.garment_object(context, create=False)
         if ob is None:
-            self.report({'ERROR'}, "No garment")
-            return {'CANCELLED'}
-        if not any(m.type == 'CLOTH' for m in ob.modifiers):
-            sim.ensure_collider(context, context.scene.cd.avatar)
-            sim.setup_layers(context)
-            sim.setup_cloth(context, ob)
-        if not sim.relax_garment(context, ob, take_in=self.take_in):
-            self.report({'ERROR'}, "The garment has no cloth - sew it first")
-            return {'CANCELLED'}
-        self.report({'INFO'}, "Relaxed %s to frame %d" % (ob.cd.garment, context.scene.frame_current))
-        return {'FINISHED'}
+            raise ValueError("No garment")
+        relaxed = yield from sim.relax_garment_steps(context, ob, take_in=self.take_in)
+        if not relaxed:
+            raise ValueError("The garment has no cloth - sew it first")
+        return f"Relaxed {ob.cd.garment} to frame {context.scene.frame_current}"
 
 
 class CD_OT_reset_sim(Operator):
