@@ -16,6 +16,8 @@ The graphical operators advance one frame at a time and show the current phase i
 
 ## Run from Blender MCP
 
+### Graphical Blender
+
 Execute the following in Blender after setting the avatar, drafting the patterns, and selecting the garment in the Clothing workspace.
 
 ```python
@@ -43,14 +45,50 @@ if status["state"] == "finished":
 
 `body_fit` checks the evaluated garment mesh at the current frame against the avatar. It reports vertices more than 4 mm inside the body by default, the maximum estimated depth in metres, and the number of garment triangles that intersect the body. Inspect the neckline, shoulders, sleeves, and seams in the viewport before finalizing. For layered or animated clothing, also check the other layers and representative poses.
 
-For unattended runs, `bpy.ops.cd.drape()` or `bpy.ops.cd.sew()` executes synchronously in background Blender.
+### Headless Blender MCP
+
+Start a fresh Blender scene for an experiment. If you need to load an empty startup scene through MCP, save your current work first and use `bpy.ops.wm.read_homefile(use_empty=True, use_factory_startup=True)`. The Blender MCP extension blocks `read_factory_settings` because it resets preferences.
+
+Run each code block as a separate MCP request. Start by importing an avatar and drafting a named garment.
+
+```python
+import bpy
+
+bpy.ops.cd.import_character(figure='MAN')
+bpy.ops.cd.add_garment(preset='TSHIRT', name='Inner shirt')
+result = {"garment": bpy.context.scene.cd.garment_name}
+```
+
+Queue the already arranged garment by name.
+
+```python
+import bpy
+from clothing_design import ops
+
+result = ops.start_sew(bpy.context, "Inner shirt")
+```
+
+Repeat this request until `state` is `finished`. Keep `frames_per_call=1` for an unknown garment or a tight timeout. A step runs at most one frame or advances the current phase. One costly frame or a weld still takes as long as Blender needs for that work. Keep the scene, view layer, and timeline in place while the job runs.
+
+```python
+import bpy
+from clothing_design import ops
+
+result = ops.step_sew(bpy.context, frames_per_call=1)
+```
+
+Use `ops.simulation_status()` to read progress after an interrupted request and `ops.cancel_sew()` to stop and keep the current state. Once the job completes and you have checked the fit and weld counts, set `bpy.context.scene.cd.garment_name` to the same name before calling `bpy.ops.cd.finalize()`. The existing `bpy.ops.cd.sew()` and `bpy.ops.cd.drape()` calls still run synchronously for standalone Blender scripts.
+
+### Cultivator outfit experiment
+
+The verified stock T-shirt and jacket use their default sleeve lengths. The longer 92 cm T-shirt sleeves and the open, knee-length jacket are separate fitting cases from the report. A crossed collar needs overlapping front pattern pieces. A sash needs a closed waist construction or an attachment to the garment underneath before gravity is enabled.
 
 ## Verification
 
 Run from the fork root with the add-on available to Blender. The targeted fit and UI tests import the checkout directly.
 
 ```sh
-blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py
+blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --operation stepped
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender53_fit.py -- --figure WOMAN --operation drape
 blender --factory-startup --enable-event-simulate --python-exit-code 1 --python tests/test_simulation_ui.py
 ```

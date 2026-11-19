@@ -14,18 +14,27 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--figure", choices=("MAN", "WOMAN"), default="MAN")
     parser.add_argument("--preset", choices=("TSHIRT", "TANK", "TROUSERS", "JACKET"), default="TSHIRT")
-    parser.add_argument("--operation", choices=("sew", "drape"), default="sew")
+    parser.add_argument("--operation", choices=("sew", "drape", "stepped"), default="sew")
     parser.add_argument("--save", type=Path)
     opts = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
 
     clothing_design.register()
     context = bpy.context
-    assert bpy.ops.cd.import_character(figure=opts.figure) == {'FINISHED'}
+    with context.temp_override(selected_objects=None):
+        assert bpy.ops.cd.import_character(figure=opts.figure) == {'FINISHED'}
     assert bpy.ops.cd.add_garment(preset=opts.preset) == {'FINISHED'}
     garment = build.garment_object(context, create=False)
     assert build.loose_edges(garment.data)
     before = time.monotonic()
-    assert getattr(bpy.ops.cd, opts.operation)() == {'FINISHED'}
+    if opts.operation == "stepped":
+        status = ops.start_sew(context, garment.cd.garment)
+        assert status["phase"] == "Queued" and not bpy.ops.cd.sew.poll()
+        for _ in range(100):
+            status = ops.step_sew(context, frames_per_call=1)
+            if status["state"] != "running":
+                break
+    else:
+        assert getattr(bpy.ops.cd, opts.operation)() == {'FINISHED'}
     print(f"{opts.operation} took {time.monotonic() - before:.2f}s")
     status = ops.simulation_status()
     assert status["state"] == "finished", status

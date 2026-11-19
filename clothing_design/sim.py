@@ -2,7 +2,7 @@
 import bpy, bmesh, math
 from contextlib import contextmanager
 from mathutils import Vector, Quaternion
-from . import patterns, build
+from . import patterns, build, props
 
 COLLIDER_COLL = "CD_Colliders"
 
@@ -481,7 +481,7 @@ def bind_to_armature(context, ob, av):
             ob.vertex_groups.remove(vg)
 
     prev_active = context.view_layer.objects.active
-    prev_sel = [o for o in context.selected_objects]
+    prev_sel = props.selected_objects(context)
     try:
         for o in prev_sel:
             o.select_set(False)
@@ -501,7 +501,7 @@ def bind_to_armature(context, ob, av):
     except Exception as e:
         return False, "weight transfer failed: %s" % e
     finally:
-        for o in context.selected_objects:
+        for o in props.selected_objects(context):
             o.select_set(False)
         for o in prev_sel:
             try:

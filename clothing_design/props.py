@@ -5,6 +5,11 @@ from bpy.props import (StringProperty, BoolProperty, FloatProperty, IntProperty,
                        FloatVectorProperty)
 from bpy.types import PropertyGroup, AddonPreferences
 
+def selected_objects(context):
+    view_layer = context.view_layer
+    return [ob for ob in view_layer.objects if ob.select_get(view_layer=view_layer)]
+
+
 ANCHORS = [
     ('TORSO_FRONT', "Torso Front",  "Wrap on the front of the torso"),
     ('TORSO_BACK',  "Torso Back",   "Wrap on the back of the torso"),

@@ -1,5 +1,6 @@
 # Clothing Design - operators.
 import bpy, bmesh, math, json, os, traceback
+from bpy.app.handlers import persistent
 from bpy.props import (StringProperty, BoolProperty, FloatProperty, IntProperty,
                        EnumProperty, FloatVectorProperty)
 from bpy.types import Operator
@@ -39,7 +40,7 @@ def seams_for(scn, garment):
 
 
 def _patterns_selected(context):
-    return [o for o in context.selected_objects if o.cd.is_pattern]
+    return [o for o in props.selected_objects(context) if o.cd.is_pattern]
 
 
 # ---------------------------------------------------------------- avatar
@@ -149,7 +150,7 @@ class CD_OT_import_character(Operator):
             pass
         avatar.measure(context, body, force=True)
         sim.ensure_collider(context, body)
-        for o in context.selected_objects:
+        for o in props.selected_objects(context):
             o.select_set(False)
         try:
             body.select_set(True)
@@ -289,6 +290,78 @@ def simulation_status():
     return _simulation_status.copy()
 
 
+def _record_progress(scene, progress):
+    phase, garment, current, total = progress
+    _simulation_status.update(phase=phase, garment=garment, stage_frame=current,
+                              stage_frames=total, frame=scene.frame_current)
+
+
+class _SewJob:
+    def __init__(self, context, garment):
+        self.scene = context.scene
+        self.view_layer = context.view_layer
+        self.steps = sew_steps(context, [garment])
+
+    def finish(self, state, message):
+        global _active_simulation
+        try:
+            self.steps.close()
+        finally:
+            _active_simulation = None
+            _simulation_status.update(state=state, message=message, frame=self.scene.frame_current)
+
+
+def start_sew(context, garment_name=None):
+    """Queue one garment for explicit frame stepping and return its status."""
+    global _active_simulation, _simulation_status
+    if _active_simulation is not None:
+        raise RuntimeError("A clothing simulation is already running")
+    if getattr(getattr(context, "screen", None), "is_animation_playing", False):
+        raise RuntimeError("Stop playback before starting a clothing simulation")
+    name = context.scene.cd.garment_name if garment_name is None else garment_name
+    garment = next((ob for ob in sim.garment_layers(context) if ob.cd.garment == name), None)
+    if garment is None:
+        raise ValueError(f"No arranged garment named {name!r} in the current scene")
+    _active_simulation = _SewJob(context, garment)
+    _simulation_status = {"state": "running", "operation": "cd.sew", "phase": "Queued",
+                          "garment": name, "frame": context.scene.frame_current}
+    return simulation_status()
+
+
+def step_sew(context, frames_per_call=1):
+    """Advance a queued sew job by at most this many frames or phase transitions."""
+    if type(frames_per_call) is not int or frames_per_call < 1:
+        raise ValueError("frames_per_call must be a positive integer")
+    job = _active_simulation
+    if not isinstance(job, _SewJob):
+        return simulation_status()
+    if context.scene != job.scene or context.view_layer != job.view_layer:
+        raise RuntimeError("Return to the original scene and view layer before stepping")
+    for _ in range(frames_per_call):
+        try:
+            progress = next(job.steps)
+        except StopIteration as result:
+            job.finish("finished", result.value)
+            break
+        except Exception as error:
+            job.finish("failed", str(error))
+            raise
+        _record_progress(job.scene, progress)
+    return simulation_status()
+
+
+def cancel_sew():
+    """Stop a queued sew job at the current frame and release the job."""
+    if isinstance(_active_simulation, _SewJob):
+        _active_simulation.finish("cancelled", "Simulation stopped at the current frame")
+    return simulation_status()
+
+
+@persistent
+def _cancel_sew_before_load(_):
+    cancel_sew()
+
+
 class SimulationOperator:
     @classmethod
     def poll(cls, context):
@@ -309,7 +382,7 @@ class SimulationOperator:
         try:
             if self._steps is None:
                 self._steps = self.steps(context)
-            phase, garment, current, total = next(self._steps)
+            progress = next(self._steps)
         except StopIteration as result:
             return self._finish(context, "finished", result.value)
         except ValueError as error:
@@ -317,8 +390,7 @@ class SimulationOperator:
         except Exception as error:
             traceback.print_exc()
             return self._finish(context, "failed", str(error))
-        _simulation_status.update(phase=phase, garment=garment, stage_frame=current,
-                                  stage_frames=total, frame=self._scene.frame_current)
+        _record_progress(self._scene, progress)
         return {'RUNNING_MODAL'}
 
     def execute(self, context):
@@ -798,7 +870,7 @@ class CD_OT_draw_pattern(Operator):
         except Exception as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-        for o in context.selected_objects:
+        for o in props.selected_objects(context):
             o.select_set(False)
         ob.select_set(True)
         context.view_layer.objects.active = ob
@@ -1097,6 +1169,7 @@ def sew_steps(context, targets):
     if not targets:
         raise ValueError("No garment to sew")
     scn = context.scene
+    yield "Preparing", targets[0].cd.garment, 0, 1
     sim.ensure_collider(context, scn.cd.avatar)
     sim.setup_layers(context)
     previous = scn.cd.garment_name
@@ -1122,6 +1195,7 @@ def sew_steps(context, targets):
                 pinned = layered_top and sim.pin_shoulders(context, garment)
                 sim.set_gravity(garment, scn.cd.stitch_gravity)
                 try:
+                    yield "Stitching", name, 0, scn.cd.stitch_frames
                     stitch_frames = scn.cd.stitch_frames
                     hold = int(stitch_frames * sim.PIN_HOLD) if pinned else -1
                     for progress in sim.advance_frames(scn, name, "Stitching", stitch_frames):
@@ -1138,6 +1212,7 @@ def sew_steps(context, targets):
                     if pinned:
                         sim.unpin_shoulders(garment)
                     sim.set_gravity(garment, 1.0)
+                yield "Settling", name, 0, scn.cd.settle_frames
                 yield from sim.advance_frames(scn, name, "Settling", scn.cd.settle_frames)
             messages.append(message)
     finally:
@@ -1480,8 +1555,11 @@ CLASSES = (
 def register():
     for c in CLASSES:
         bpy.utils.register_class(c)
+    bpy.app.handlers.load_pre.append(_cancel_sew_before_load)
 
 
 def unregister():
+    cancel_sew()
+    bpy.app.handlers.load_pre.remove(_cancel_sew_before_load)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
