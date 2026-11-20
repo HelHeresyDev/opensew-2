@@ -596,8 +596,8 @@ def body_fit(context, ob, tolerance=0.004):
             "intersecting_triangles": len(intersecting), "max_depth_m": deepest}
 
 
-def layer_fit(context, ob):
-    """Count garment triangles intersecting each layer underneath it."""
+def layer_fit(context, ob, *, details=False):
+    """Count intersecting triangles on the outer garment or on both surfaces."""
     from mathutils.bvhtree import BVHTree
 
     coords, faces = _world_surface(context, ob)
@@ -608,7 +608,15 @@ def layer_fit(context, ob):
             continue
         inner_coords, inner_faces = _world_surface(context, inner)
         tree = BVHTree.FromPolygons(inner_coords, inner_faces, all_triangles=True)
-        result[inner.cd.garment] = len({face for face, _ in surface.overlap(tree)})
+        overlaps = surface.overlap(tree)
+        outer_count = len({face for face, _ in overlaps})
+        if details:
+            result[inner.cd.garment] = {
+                "outer_triangles": outer_count,
+                "inner_triangles": len({face for _, face in overlaps}),
+            }
+        else:
+            result[inner.cd.garment] = outer_count
     return result
 
 
@@ -779,8 +787,7 @@ def _relax_layer_steps(context, ob, underneath, take_in, phase_bend, relax_bend,
         return False
     st = cloth.settings
     st.bending_stiffness = phase_bend
-    if take_in > 0.0:
-        st.shrink_min = take_in
+    st.shrink_min = take_in
     cloth.point_cache.frame_end = max(cloth.point_cache.frame_end,
                                       scn.frame_current + frames + relax_frames + 10)
     for inner in underneath:

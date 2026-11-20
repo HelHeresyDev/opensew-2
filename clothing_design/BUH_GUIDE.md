@@ -83,7 +83,7 @@ Use `ops.simulation_status()` to read progress after an interrupted request and 
 
 ### Resume Relax between requests
 
-Queue Relax once on a sewn garment. Set `take_in` to choose how much the cloth should tighten.
+Queue Relax once on a sewn garment. Set `take_in` to choose how much the cloth should tighten. `take_in=0` disables shrinkage during the first phase. For a layered fitting test, finalize the approved inner garments before Relax so their shape holds and their cloth solvers do not run on every frame. Use the same saved fitting pose, initial mesh and timeline for every comparison. A live cloth solver carries simulation state forward, so applying another pass to a previously relaxed garment changes the starting condition.
 
 ```python
 import bpy
@@ -107,7 +107,7 @@ Turn off **Clothing → Patterns → Show 2D Patterns** or set `bpy.context.scen
 
 Use `build.activate_garment(bpy.context, garment)` before an operation that acts on the active garment. The argument accepts the garment's OpenSew name or its mesh object. Blender's `bpy.data.objects.find` takes an object name string. [Blender collection API](https://docs.blender.org/api/current/bpy.types.bpy_prop_collection.html)
 
-`bpy.ops.cd.add_garment` drafts presets. The lower-level signature for a custom piece is `patterns.create_panel(context, name, segs, ..., garment=..., anchor=..., height=..., ease=...)`. Each segment is a name and its 2D points. Call `avatar.measure(bpy.context)` to measure the body's mesh.
+`bpy.ops.cd.add_garment(preset='TSHIRT', name='Inner shirt')` drafts a named preset. Use the resulting OpenSew name in `scene.cd.garment_name` to retrieve the mesh with `build.garment_object(context, scene.cd.garment_name, create=False)`. The mesh stores that name in `garment.cd.garment`. The lower-level signature for a custom piece is `patterns.create_panel(context, name, segs, ..., garment=..., anchor=..., height=..., ease=...)`. Each segment is a name and its 2D points. Call `avatar.measure(bpy.context)` to measure the body's mesh.
 
 ### Draft from a structured specification
 
@@ -143,7 +143,7 @@ garment = build.draft_garment(bpy.context, {
 
 ### Check layered fit and animation
 
-Use `sim.body_fit(context, garment)` for intersections with the avatar and `sim.layer_fit(context, garment)` for intersections with each inner layer. Check weld counts and inspect the sleeve and collar shape as separate fit checks. An outer garment can clear the body while passing through another garment.
+Use `sim.body_fit(context, garment)` for intersections with the avatar and `sim.layer_fit(context, garment)` to count the garment's intersecting triangles against each inner layer. Pass `details=True` to get `outer_triangles` and `inner_triangles` for each pair. Both forms evaluate the visible mesh at the current frame and work before and after `cd.finalize()`. Thickness and rig deformation can change the counts. Treat triangle counts as surface-intersection measurements and inspect the crossing to determine which region needs adjustment. Open garment surfaces can cross without enclosing a well-defined volume. Also check weld counts, sleeves and collar shape.
 
 After finalizing the skinned outfit, call `sim.pose_fit(bpy.context, garment, [1, 28, 62])` with the relevant animation frames. It reports body intersections at each specified frame and restores the original timeline position. Include a fitting pose, an overhead reach, a wide stance, and a high kick from the target rig's animation set when available.
 

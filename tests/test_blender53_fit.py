@@ -82,9 +82,13 @@ def main():
         assert waist - 0.16 < min(heights) < waist < max(heights) < waist + 0.08
 
     if opts.relax:
+        cloth = next(mod for mod in garment.modifiers if mod.type == 'CLOTH')
+        cloth.settings.shrink_min = 0.05
         status = ops.start_relax(context, garment.cd.garment, take_in=0, frames=3, relax_frames=2)
         assert status["operation"] == "cd.relax"
         assert ops.step_relax(context, frames_per_call=100, time_budget_s=1e-9)["frame"] == 77
+        cloth = next(mod for mod in garment.modifiers if mod.type == 'CLOTH')
+        assert cloth.settings.shrink_min == 0.0, cloth.settings.shrink_min
         for _ in range(8):
             status = ops.step_relax(context, frames_per_call=2)
             if status["state"] == "finished":
